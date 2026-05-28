@@ -1,24 +1,16 @@
 # Linux 远程服务器部署指南
 
-这份指南用于在一台 Linux 服务器上部署 MipaVoice 后端和 LiveKit。推荐使用域名和 HTTPS/WSS。
+这份指南用于把 MipaVoice 后端和 LiveKit 部署到一台 Linux 服务器上。考虑到服务器 CPU 性能较低，推荐在本机 WSL 里用 `cargo-zigbuild` 编译 Linux 二进制，并指定 glibc 兼容版本为 **2.17**，然后把编译好的文件上传到服务器。
 
-## 1. 服务器准备
+## 1. 在 WSL 里准备构建环境
 
-示例环境：
-
-- Ubuntu 22.04 或 24.04
-- 一个域名，例如 `voice.example.com`
-- 防火墙开放：
-  - `80/tcp`
-  - `443/tcp`
-  - `7881/tcp`
-  - `7882/udp`
+以下命令在 WSL Ubuntu 中执行。
 
 安装基础依赖：
 
 ```bash
 sudo apt update
-sudo apt install -y curl unzip nginx build-essential pkg-config libssl-dev
+sudo apt install -y curl build-essential pkg-config
 ```
 
 安装 Rust：
@@ -28,21 +20,110 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source ~/.cargo/env
 ```
 
-## 2. 部署 MipaVoice 后端
-
-把项目上传到服务器，然后在项目根目录构建：
+安装 `cargo-zigbuild`：
 
 ```bash
-cargo build --release -p mipavoice-server
+cargo install cargo-zigbuild
 ```
 
-创建部署目录：
+安装 Zig。推荐使用包管理器或从 Zig 官网下载 Linux x86_64 版本，只要 `zig version` 能正常输出即可：
+
+```bash
+zig version
+```
+
+## 2. 编译 glibc 2.17 兼容后端
+
+在 WSL 中进入项目目录。如果项目在 Windows 路径，例如：
+
+```text
+D:\Backup\Documents\MipaVoice
+```
+
+对应 WSL 路径通常是：
+
+```bash
+cd /mnt/d/Backup/Documents/MipaVoice
+```
+
+运行项目自带脚本：
+
+```bash
+bash scripts/build-server-linux-glibc217.sh
+```
+
+脚本内部使用的目标是：
+
+```bash
+x86_64-unknown-linux-gnu.2.17
+```
+
+等价手动命令：
+
+```bash
+cargo zigbuild --release -p mipavoice-server --target x86_64-unknown-linux-gnu.2.17
+```
+
+构建产物会复制到：
+
+```text
+dist/server-linux-glibc217/mipavoice-server
+```
+
+这个文件就是要上传到 Linux 服务器的后端可执行文件。
+
+## 3. 上传后端到服务器
+
+在 WSL 中执行：
+
+```bash
+scp dist/server-linux-glibc217/mipavoice-server user@your-server:/tmp/mipavoice-server
+```
+
+登录服务器：
+
+```bash
+ssh user@your-server
+```
+
+安装到 `/opt/mipavoice`：
 
 ```bash
 sudo mkdir -p /opt/mipavoice
-sudo cp target/release/mipavoice-server /opt/mipavoice/
+sudo mv /tmp/mipavoice-server /opt/mipavoice/mipavoice-server
+sudo chmod +x /opt/mipavoice/mipavoice-server
 sudo chown -R $USER:$USER /opt/mipavoice
 ```
+
+## 4. 服务器准备
+
+示例环境：
+
+- Ubuntu、Debian、CentOS 7+ 等 x86_64 Linux
+- glibc 版本至少 2.17
+- 一个域名，例如 `voice.example.com`
+- 防火墙开放：
+  - `80/tcp`
+  - `443/tcp`
+  - `7881/tcp`
+  - `7882/udp`
+
+确认 glibc：
+
+```bash
+ldd --version
+```
+
+安装运行时工具：
+
+```bash
+sudo apt update
+sudo apt install -y curl unzip nginx sqlite3
+```
+
+CentOS/RHEL 可用对应包管理器安装 `curl`、`unzip`、`nginx`、`sqlite`。
+
+## 5. 配置 MipaVoice 后端
 
 创建环境文件：
 
@@ -84,13 +165,13 @@ sudo systemctl enable --now mipavoice
 sudo systemctl status mipavoice
 ```
 
-## 3. 安装 LiveKit Server
+## 6. 安装 LiveKit Server
 
 下载 Linux amd64 版本：
 
 ```bash
 cd /tmp
-curl -L https://github.com/livekit/livekit/releases/latest/download/livekit_$(uname -s | tr '[:upper:]' '[:lower:]')_amd64.tar.gz -o livekit.tar.gz
+curl -L https://github.com/livekit/livekit/releases/latest/download/livekit_linux_amd64.tar.gz -o livekit.tar.gz
 tar -xzf livekit.tar.gz
 sudo install -m 755 livekit-server /usr/local/bin/livekit-server
 ```
@@ -144,9 +225,9 @@ sudo systemctl enable --now livekit
 sudo systemctl status livekit
 ```
 
-## 4. Nginx 反向代理
+## 7. Nginx 反向代理和 HTTPS
 
-下面示例把后端 API 和 LiveKit WebSocket 都放在同一个域名 `voice.example.com` 上。
+示例域名：`voice.example.com`。
 
 ```bash
 sudo tee /etc/nginx/sites-available/mipavoice >/dev/null <<'EOF'
@@ -184,17 +265,17 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-建议使用 Certbot 配置 HTTPS：
+建议用 Certbot 配置 HTTPS：
 
 ```bash
 sudo apt install -y certbot python3-certbot-nginx
 sudo certbot --nginx -d voice.example.com
 ```
 
-HTTPS 生效后，把后端环境里的 `LIVEKIT_URL` 设置为：
+HTTPS 生效后，确认 `/opt/mipavoice/mipavoice.env`：
 
 ```text
-wss://voice.example.com
+LIVEKIT_URL=wss://voice.example.com
 ```
 
 然后重启后端：
@@ -203,7 +284,7 @@ wss://voice.example.com
 sudo systemctl restart mipavoice
 ```
 
-## 5. 客户端连接远程服务器
+## 8. 客户端连接远程服务器
 
 在 MipaVoice 客户端里打开“设置”，后端服务器填写：
 
@@ -213,7 +294,7 @@ https://voice.example.com
 
 保存后频道列表会从远程服务器读取。
 
-## 6. 验证
+## 9. 验证
 
 检查后端：
 
@@ -234,16 +315,23 @@ sudo journalctl -u mipavoice -f
 sudo journalctl -u livekit -f
 ```
 
-两个客户端加入同一个频道后，应该能互相听到声音。
+两个客户端加入同一个频道后，应该能互相听到声音，并能发送持久化文字消息。
 
-## 7. 更新服务
+## 10. 更新服务
 
-重新上传代码后：
+本机 WSL 重新编译：
 
 ```bash
-cargo build --release -p mipavoice-server
+bash scripts/build-server-linux-glibc217.sh
+scp dist/server-linux-glibc217/mipavoice-server user@your-server:/tmp/mipavoice-server
+```
+
+服务器上替换二进制：
+
+```bash
 sudo systemctl stop mipavoice
-sudo cp target/release/mipavoice-server /opt/mipavoice/
+sudo mv /tmp/mipavoice-server /opt/mipavoice/mipavoice-server
+sudo chmod +x /opt/mipavoice/mipavoice-server
 sudo systemctl start mipavoice
 ```
 

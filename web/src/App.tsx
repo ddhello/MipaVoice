@@ -41,6 +41,7 @@ type AudioDevices = {
 
 type ServerInfo = {
   flag: string;
+  countryCode?: string;
   label: string;
   latency: number | null;
 };
@@ -94,6 +95,7 @@ const text = {
   messagePlaceholder: '\u53d1\u9001\u6d88\u606f...',
   send: '\u53d1\u9001',
   kicked: '\u4f60\u5df2\u88ab\u9891\u9053\u521b\u5efa\u8005\u8e22\u51fa',
+  localVolume: '\u672c\u5730\u63a5\u6536\u97f3\u91cf',
 };
 
 function ownerTokensFromStorage() {
@@ -120,6 +122,101 @@ function flagFromCountry(code: string) {
   return code
     .toUpperCase()
     .replace(/./g, (char) => String.fromCodePoint(127397 + char.charCodeAt(0)));
+}
+
+type GeoLookup = {
+  success?: boolean;
+  country?: string;
+  country_code?: string;
+  flag?: {
+    emoji?: string;
+  };
+};
+
+type IpApiLookup = {
+  country_code?: string;
+  country_name?: string;
+  error?: boolean;
+};
+
+type DnsLookup = {
+  Answer?: Array<{
+    data?: string;
+    type?: number;
+  }>;
+};
+
+type ResolvedGeo = {
+  flag: string;
+  countryCode: string;
+  location: string;
+};
+
+function isIpv4(value: string) {
+  return /^(\d{1,3}\.){3}\d{1,3}$/.test(value);
+}
+
+function normalizeCountryCode(code: string) {
+  const clean = code.trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(clean) ? clean : '';
+}
+
+async function resolveHostIp(host: string) {
+  if (isIpv4(host)) return host;
+
+  const response = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(host)}&type=A`);
+  if (!response.ok) return '';
+
+  const payload = (await response.json()) as DnsLookup;
+  return payload.Answer?.find((answer) => answer.type === 1 && answer.data && isIpv4(answer.data))?.data ?? '';
+}
+
+async function lookupGeoTarget(target: string): Promise<ResolvedGeo | null> {
+  try {
+    const response = await fetch(`https://ipwho.is/${encodeURIComponent(target)}`);
+    if (response.ok) {
+      const payload = (await response.json()) as GeoLookup;
+      const countryCode = normalizeCountryCode(payload.country_code ?? '');
+      if (payload.success !== false && countryCode) {
+        return {
+          flag: payload.flag?.emoji || flagFromCountry(countryCode),
+          countryCode,
+          location: payload.country || countryCode,
+        };
+      }
+    }
+  } catch {
+    // Try the fallback provider below.
+  }
+
+  try {
+    const response = await fetch(`https://ipapi.co/${encodeURIComponent(target)}/json/`);
+    if (!response.ok) return null;
+
+    const payload = (await response.json()) as IpApiLookup;
+    const countryCode = normalizeCountryCode(payload.country_code ?? '');
+    if (!payload.error && countryCode) {
+      return {
+        flag: flagFromCountry(countryCode),
+        countryCode,
+        location: payload.country_name || countryCode,
+      };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+async function lookupServerGeo(host: string) {
+  const direct = await lookupGeoTarget(host);
+  if (direct) return direct;
+
+  const ip = await resolveHostIp(host).catch(() => '');
+  if (!ip || ip === host) return null;
+
+  return lookupGeoTarget(ip);
 }
 
 function playToneSequence(steps: Array<{ frequency: number; start: number; duration: number }>) {
@@ -188,8 +285,11 @@ export function App() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatDraft, setChatDraft] = useState('');
   const [ownerTokens, setOwnerTokens] = useState(ownerTokensFromStorage);
-  const [serverInfo, setServerInfo] = useState<ServerInfo>({ flag: '🌐', label: '\u672c\u5730\u6216\u672a\u77e5\u670d\u52a1\u5668', latency: null });
+  const [serverInfo, setServerInfo] = useState<ServerInfo>({ flag: '\uD83C\uDF10', label: '\u672c\u5730\u6216\u672a\u77e5\u670d\u52a1\u5668', latency: null });
+  const [participantVolumes, setParticipantVolumes] = useState<Record<string, number>>({});
+  const [activeSpeakers, setActiveSpeakers] = useState<string[]>([]);
   const voiceRef = useRef<VoiceConnection | null>(null);
+  const joinLockRef = useRef(false);
 
   const signedIn = username.trim().length > 0;
   const activeMembers = active ? members[active.channel.id] ?? [] : [];
@@ -235,26 +335,20 @@ export function App() {
     }
 
     if (!host || isLocalHost(host)) {
-      setServerInfo({ flag: '🌐', label: '\u672c\u5730\u670d\u52a1\u5668', latency });
-      return;
-    }
-
-    if (!/^[\d.]+$/.test(host)) {
-      setServerInfo({ flag: '🌐', label: host, latency });
+      setServerInfo({ flag: '\uD83C\uDF10', label: '\u672c\u5730\u670d\u52a1\u5668', latency });
       return;
     }
 
     try {
-      const response = await fetch(`https://api.country.is/${host}`);
-      const payload = (await response.json()) as { country?: string };
-      const country = payload.country ?? '';
+      const geo = await lookupServerGeo(host);
       setServerInfo({
-        flag: country ? flagFromCountry(country) : '🌐',
-        label: country ? `${host} · ${country}` : host,
+        flag: geo?.flag ?? '\uD83C\uDF10',
+        countryCode: geo?.countryCode,
+        label: geo?.location ? `${host} - ${geo.location}` : host,
         latency,
       });
     } catch {
-      setServerInfo({ flag: '🌐', label: host, latency });
+      setServerInfo({ flag: '\uD83C\uDF10', label: host, latency });
     }
   }, [serverUrl]);
 
@@ -457,12 +551,14 @@ export function App() {
 
   const joinChannel = async (channel: Channel, password?: string) => {
     if (!signedIn) return;
+    if (joinLockRef.current) return;
+    joinLockRef.current = true;
     setLoading(true);
     setError(null);
     try {
       await leaveCurrent(false);
       const joined = await api.joinChannel(channel.id, username, password);
-      const voice = await connectVoice(joined.livekit_url, joined.token, setVoiceStatus, {
+      const voice = await connectVoice(joined.livekit_url, joined.token, setVoiceStatus, setActiveSpeakers, {
         inputDeviceId,
         outputDeviceId,
       });
@@ -477,6 +573,7 @@ export function App() {
       setError(err instanceof Error ? err.message : '\u65e0\u6cd5\u52a0\u5165\u9891\u9053');
       setVoiceStatus(text.idle);
     } finally {
+      joinLockRef.current = false;
       setLoading(false);
     }
   };
@@ -487,6 +584,7 @@ export function App() {
     voiceRef.current?.disconnect();
     voiceRef.current = null;
     setAudioLevel(0);
+    setActiveSpeakers([]);
     if (current) {
       await api.leaveChannel(current.channel.id, current.sessionId).catch(() => undefined);
     }
@@ -532,6 +630,12 @@ export function App() {
     if (voiceRef.current) {
       await voiceRef.current.switchOutput(deviceId || 'default').catch(() => setError('\u5f53\u524d\u73af\u5883\u4e0d\u652f\u6301\u5207\u6362\u8f93\u51fa\u8bbe\u5907'));
     }
+  };
+
+  const setRemoteVolume = (identity: string, volume: number) => {
+    const nextVolume = Math.max(0, Math.min(1, volume));
+    setParticipantVolumes((current) => ({ ...current, [identity]: nextVolume }));
+    voiceRef.current?.setParticipantVolume(identity, nextVolume);
   };
 
   const saveServerUrl = async () => {
@@ -611,7 +715,9 @@ export function App() {
             <div key={channel.id} className={`channel-row ${active?.channel.id === channel.id ? 'active' : ''}`}>
               <button
                 className="channel-item"
+                disabled={loading}
                 onClick={() => {
+                  if (loading) return;
                   if (channel.has_password) {
                     setPasswordChannel(channel);
                   } else {
@@ -671,11 +777,26 @@ export function App() {
             <h2>{active ? active.channel.name : text.notConnected}</h2>
           </div>
           <div className="connection-pill" title={`${serverInfo.label}\n${serverInfo.latency === null ? '\u5ef6\u8fdf\uff1a\u672a\u8fde\u63a5' : `\u5ef6\u8fdf\uff1a${serverInfo.latency} ms`}`}>
-            <span className="server-flag">{serverInfo.flag}</span>
+            <span className="server-flag">
+              {serverInfo.countryCode ? (
+                <img src={`https://flagcdn.com/24x18/${serverInfo.countryCode.toLowerCase()}.png`} alt={serverInfo.countryCode} />
+              ) : (
+                serverInfo.flag
+              )}
+            </span>
             <Radio size={16} />
             {voiceStatus}
             <div className="server-tooltip">
-              <strong>{serverInfo.flag} {serverInfo.label}</strong>
+              <strong>
+                <span className="server-flag">
+                  {serverInfo.countryCode ? (
+                    <img src={`https://flagcdn.com/24x18/${serverInfo.countryCode.toLowerCase()}.png`} alt={serverInfo.countryCode} />
+                  ) : (
+                    serverInfo.flag
+                  )}
+                </span>
+                {serverInfo.label}
+              </strong>
               <span>{serverInfo.latency === null ? '\u5ef6\u8fdf\uff1a\u672a\u8fde\u63a5' : `\u5ef6\u8fdf\uff1a${serverInfo.latency} ms`}</span>
             </div>
           </div>
@@ -689,9 +810,27 @@ export function App() {
             </div>
             {activeMembers.map((member) => (
               <div className="member-row" key={member.session_id}>
-                <span className="avatar">{member.username.slice(0, 1).toUpperCase()}</span>
-                <span>{member.username}</span>
-                {member.session_id === active?.sessionId && <span className="you-badge">{text.you}</span>}
+                <span className={`avatar ${activeSpeakers.includes(member.username) ? 'speaking' : ''}`}>
+                  {member.username.slice(0, 1).toUpperCase()}
+                </span>
+                <div className="member-body">
+                  <div className="member-line">
+                    <span>{member.username}</span>
+                    {member.session_id === active?.sessionId && <span className="you-badge">{text.you}</span>}
+                  </div>
+                  {member.session_id !== active?.sessionId && (
+                    <label className="member-volume">
+                      <span>{text.localVolume}</span>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={Math.round((participantVolumes[member.username] ?? 1) * 100)}
+                        onChange={(event) => setRemoteVolume(member.username, Number(event.target.value) / 100)}
+                      />
+                    </label>
+                  )}
+                </div>
                 {active && ownerTokens[active.channel.id] && member.session_id !== active.sessionId && (
                   <button className="member-kick" title={text.kick} onClick={() => void kickMember(member)}>
                     <X size={15} />
@@ -784,7 +923,7 @@ export function App() {
             {text.channelPassword}
             <input value={joinPassword} onChange={(event) => setJoinPassword(event.target.value)} type="password" autoFocus />
           </label>
-          <button className="primary-action" disabled={loading} onClick={() => void joinChannel(passwordChannel, joinPassword)}>
+          <button className="primary-action" disabled={loading || joinLockRef.current} onClick={() => void joinChannel(passwordChannel, joinPassword)}>
             {text.join}
           </button>
         </Dialog>

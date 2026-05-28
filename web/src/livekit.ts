@@ -1,10 +1,11 @@
 import { Room, RoomEvent, Track } from 'livekit-client';
-import type { RemoteTrack, RemoteTrackPublication, RemoteParticipant } from 'livekit-client';
+import type { RemoteParticipant, RemoteTrack, RemoteTrackPublication } from 'livekit-client';
 
 export type VoiceConnection = {
   room: Room;
   disconnect: () => void;
   setMuted: (muted: boolean) => Promise<void>;
+  setParticipantVolume: (identity: string, volume: number) => void;
   switchInput: (deviceId: string) => Promise<void>;
   switchOutput: (deviceId: string) => Promise<void>;
 };
@@ -13,6 +14,7 @@ export async function connectVoice(
   url: string,
   token: string,
   onStatus: (status: string) => void,
+  onActiveSpeakers?: (identities: string[]) => void,
   devices?: { inputDeviceId?: string; outputDeviceId?: string },
 ): Promise<VoiceConnection> {
   const room = new Room({
@@ -22,6 +24,7 @@ export async function connectVoice(
 
   const audioRoot = document.getElementById('audio-root');
   const attached = new Map<string, HTMLMediaElement>();
+  const participantVolumes = new Map<string, number>();
 
   const attachAudio = (
     track: RemoteTrack,
@@ -32,6 +35,8 @@ export async function connectVoice(
     const key = `${participant.identity}:${publication.trackSid}`;
     const element = track.attach();
     element.dataset.trackKey = key;
+    element.dataset.participantIdentity = participant.identity;
+    element.volume = participantVolumes.get(participant.identity) ?? 1;
     element.autoplay = true;
     attached.set(key, element);
     audioRoot.appendChild(element);
@@ -52,14 +57,17 @@ export async function connectVoice(
   };
 
   room
-    .on(RoomEvent.Connected, () => onStatus('已连接'))
-    .on(RoomEvent.Reconnecting, () => onStatus('正在重连'))
-    .on(RoomEvent.Reconnected, () => onStatus('已连接'))
-    .on(RoomEvent.Disconnected, () => onStatus('已断开'))
+    .on(RoomEvent.Connected, () => onStatus('\u5df2\u8fde\u63a5'))
+    .on(RoomEvent.Reconnecting, () => onStatus('\u6b63\u5728\u91cd\u8fde'))
+    .on(RoomEvent.Reconnected, () => onStatus('\u5df2\u8fde\u63a5'))
+    .on(RoomEvent.Disconnected, () => onStatus('\u5df2\u65ad\u5f00'))
+    .on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+      onActiveSpeakers?.(speakers.map((speaker) => speaker.identity));
+    })
     .on(RoomEvent.TrackSubscribed, attachAudio)
     .on(RoomEvent.TrackUnsubscribed, detachAudio);
 
-  onStatus('正在连接');
+  onStatus('\u6b63\u5728\u8fde\u63a5');
   await room.connect(url, token);
   if (devices?.outputDeviceId) {
     await room.switchActiveDevice('audiooutput', devices.outputDeviceId).catch(() => undefined);
@@ -80,6 +88,15 @@ export async function connectVoice(
     },
     setMuted: async (muted: boolean) => {
       await room.localParticipant.setMicrophoneEnabled(!muted);
+    },
+    setParticipantVolume: (identity: string, volume: number) => {
+      const nextVolume = Math.max(0, Math.min(1, volume));
+      participantVolumes.set(identity, nextVolume);
+      for (const element of attached.values()) {
+        if (element.dataset.participantIdentity === identity) {
+          element.volume = nextVolume;
+        }
+      }
     },
     switchInput: async (deviceId: string) => {
       await room.switchActiveDevice('audioinput', deviceId);

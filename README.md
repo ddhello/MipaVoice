@@ -55,7 +55,7 @@ The default LiveKit development credentials are `devkey` / `secret`.
 ## Guides
 
 - [Windows 客户端打包指南](docs/windows-client-build.md)
-- [Linux 远程服务器部署指南](docs/linux-server-deploy.md)
+- [Linux 远程服务器部署指南](docs/linux-server-deploy.md)（包含 WSL + zigbuild + glibc 2.17 编译流程）
 
 ## Environment
 
