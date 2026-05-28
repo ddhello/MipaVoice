@@ -1,0 +1,9 @@
+node_modules/
+target/
+web/dist/
+.bin/
+.logs/
+*.db
+*.db-shm
+*.db-wal
+.env
