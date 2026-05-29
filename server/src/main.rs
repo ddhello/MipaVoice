@@ -761,7 +761,7 @@ async fn sfu_socket(mut socket: WebSocket, state: AppState, claims: SfuClaims) {
             let rooms = rooms.clone();
             let peer = peer_for_state.clone();
             Box::pin(async move {
-                tracing::debug!(
+                tracing::info!(
                     identity = %peer.identity,
                     room = %peer.room,
                     state = ?connection_state,
@@ -809,7 +809,7 @@ async fn sfu_socket(mut socket: WebSocket, state: AppState, claims: SfuClaims) {
         }
     }
 
-    tracing::debug!(
+    tracing::info!(
         identity = %peer.identity,
         room = %peer.room,
         "SFU signaling socket closed"
@@ -866,6 +866,11 @@ async fn cleanup_sfu_peer(rooms: Arc<SfuRooms>, peer: Arc<SfuPeer>) {
         return;
     }
 
+    tracing::info!(
+        identity = %peer.identity,
+        room = %peer.room,
+        "SFU peer cleanup"
+    );
     rooms.leave(&peer).await;
     let _ = peer.pc.close().await;
 }
@@ -907,6 +912,11 @@ async fn handle_sfu_signal(
             peer.pc.add_ice_candidate(candidate).await?;
         }
         SfuInboundSignal::Disconnect => {
+            tracing::info!(
+                identity = %peer.identity,
+                room = %peer.room,
+                "SFU client requested disconnect"
+            );
             cleanup_sfu_peer(rooms.clone(), peer.clone()).await;
         }
         SfuInboundSignal::Ping => {}
