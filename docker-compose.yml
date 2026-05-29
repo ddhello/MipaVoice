@@ -12,6 +12,8 @@ services:
       MIPAVOICE_DATABASE_URL: sqlite:///data/mipavoice.db
       MIPAVOICE_SFU_URL: ${MIPAVOICE_SFU_URL:-/sfu}
       MIPAVOICE_SFU_SECRET: ${MIPAVOICE_SFU_SECRET:-dev-secret-change-me}
+      MIPAVOICE_SFU_PUBLIC_IP: ${MIPAVOICE_SFU_PUBLIC_IP:-}
+      MIPAVOICE_SFU_UDP_PORT: ${MIPAVOICE_SFU_UDP_PORT:-50000}
     volumes:
       - mipavoice-data:/data
 

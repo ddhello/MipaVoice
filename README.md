@@ -52,3 +52,5 @@ The backend reads these variables:
 - `MIPAVOICE_DATABASE_URL` defaults to `sqlite://mipavoice.db`
 - `MIPAVOICE_SFU_URL` defaults to `/sfu`
 - `MIPAVOICE_SFU_SECRET` defaults to `dev-secret-change-me`
+- `MIPAVOICE_SFU_PUBLIC_IP` should be set to the server public IP for internet deployment
+- `MIPAVOICE_SFU_UDP_PORT` defaults to `50000`

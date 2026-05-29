@@ -33,8 +33,10 @@ ENV MIPAVOICE_BIND_ADDR=0.0.0.0:3901
 ENV MIPAVOICE_DATABASE_URL=sqlite:///data/mipavoice.db
 ENV MIPAVOICE_SFU_URL=/sfu
 ENV MIPAVOICE_SFU_SECRET=dev-secret-change-me
+ENV MIPAVOICE_SFU_UDP_PORT=50000
 
 EXPOSE 3901
+EXPOSE 50000/udp
 VOLUME ["/data"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

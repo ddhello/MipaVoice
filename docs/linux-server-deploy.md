@@ -9,6 +9,8 @@ MIPAVOICE_BIND_ADDR=0.0.0.0:3901
 MIPAVOICE_DATABASE_URL=sqlite:///opt/mipavoice/mipavoice.db
 MIPAVOICE_SFU_URL=/sfu
 MIPAVOICE_SFU_SECRET=replace-with-a-long-random-secret
+MIPAVOICE_SFU_PUBLIC_IP=YOUR_SERVER_PUBLIC_IP
+MIPAVOICE_SFU_UDP_PORT=50000
 ```
 
 `MIPAVOICE_SFU_SECRET` 用于签发和校验内置 SFU 的入会 JWT。后端签发的 JWT 包含 `sub`、`name`、`room` 和 `exp`。
@@ -18,7 +20,9 @@ MIPAVOICE_SFU_SECRET=replace-with-a-long-random-secret
 ```bash
 cargo build --release -p mipavoice-server
 MIPAVOICE_SFU_SECRET=replace-with-a-long-random-secret \
+MIPAVOICE_SFU_PUBLIC_IP=YOUR_SERVER_PUBLIC_IP \
+MIPAVOICE_SFU_UDP_PORT=50000 \
 ./target/release/mipavoice-server
 ```
 
-生产环境建议继续使用 systemd 或容器托管后端进程，并确保反向代理支持 WebSocket 升级到 `/sfu`。
+生产环境建议继续使用 systemd 或容器托管后端进程，并确保反向代理支持 WebSocket 升级到 `/sfu`。公网部署时需要在云安全组和系统防火墙放行 `50000/udp`。
