@@ -47,6 +47,11 @@ type ServerInfo = {
   countryCode?: string;
   label: string;
   latency: number | null;
+  packetLoss: number | null;
+};
+
+type ServerProbe = {
+  ok: boolean;
 };
 
 const text = {
@@ -321,17 +326,27 @@ export function App() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatDraft, setChatDraft] = useState('');
   const [ownerTokens, setOwnerTokens] = useState(ownerTokensFromStorage);
-  const [serverInfo, setServerInfo] = useState<ServerInfo>({ flag: '\uD83C\uDF10', label: '\u672c\u5730\u6216\u672a\u77e5\u670d\u52a1\u5668', latency: null });
+  const [serverInfo, setServerInfo] = useState<ServerInfo>({
+    flag: '\uD83C\uDF10',
+    label: '\u672c\u5730\u6216\u672a\u77e5\u670d\u52a1\u5668',
+    latency: null,
+    packetLoss: null,
+  });
   const [participantVolumes, setParticipantVolumes] = useState<Record<string, number>>({});
   const [volumePanelFor, setVolumePanelFor] = useState<string | null>(null);
   const [activeSpeakers, setActiveSpeakers] = useState<string[]>([]);
   const voiceRef = useRef<VoiceConnection | null>(null);
   const joinLockRef = useRef(false);
+  const serverProbeHistoryRef = useRef<ServerProbe[]>([]);
 
   const signedIn = username.trim().length > 0;
   const activeMembers = active ? members[active.channel.id] ?? [] : [];
+  const latencyText = serverInfo.latency === null ? '\u5ef6\u8fdf\uff1a\u672a\u8fde\u63a5' : `\u5ef6\u8fdf\uff1a${serverInfo.latency} ms`;
+  const packetLossText =
+    serverInfo.packetLoss === null ? '\u4e22\u5305\u7387\uff1a\u672a\u8fde\u63a5' : `\u4e22\u5305\u7387\uff1a${serverInfo.packetLoss}%`;
 
   useEffect(() => {
+    serverProbeHistoryRef.current = [];
     setApiBaseUrl(serverUrl);
   }, [serverUrl]);
 
@@ -367,16 +382,27 @@ export function App() {
     const host = hostFromServerUrl(baseUrl);
     const started = performance.now();
     let latency: number | null = null;
+    let healthOk = false;
 
     try {
       await api.health();
       latency = Math.round(performance.now() - started);
+      healthOk = true;
     } catch {
       latency = null;
     }
 
+    serverProbeHistoryRef.current = [...serverProbeHistoryRef.current, { ok: healthOk }].slice(-20);
+    const packetLoss =
+      serverProbeHistoryRef.current.length === 0
+        ? null
+        : Math.round(
+            (serverProbeHistoryRef.current.filter((probe) => !probe.ok).length / serverProbeHistoryRef.current.length) *
+              100,
+          );
+
     if (!host || isLocalHost(host)) {
-      setServerInfo({ flag: '\uD83C\uDF10', label: '\u672c\u5730\u670d\u52a1\u5668', latency });
+      setServerInfo({ flag: '\uD83C\uDF10', label: '\u672c\u5730\u670d\u52a1\u5668', latency, packetLoss });
       return;
     }
 
@@ -387,9 +413,10 @@ export function App() {
         countryCode: geo?.countryCode,
         label: geo?.location ? `${host} - ${geo.location}` : host,
         latency,
+        packetLoss,
       });
     } catch {
-      setServerInfo({ flag: '\uD83C\uDF10', label: host, latency });
+      setServerInfo({ flag: '\uD83C\uDF10', label: host, latency, packetLoss });
     }
   }, [serverUrl]);
 
@@ -831,7 +858,7 @@ export function App() {
             <span className="eyebrow">{text.currentChannel}</span>
             <h2>{active ? active.channel.name : text.notConnected}</h2>
           </div>
-          <div className="connection-pill" title={`${serverInfo.label}\n${serverInfo.latency === null ? '\u5ef6\u8fdf\uff1a\u672a\u8fde\u63a5' : `\u5ef6\u8fdf\uff1a${serverInfo.latency} ms`}`}>
+          <div className="connection-pill" title={`${serverInfo.label}\n${latencyText}\n${packetLossText}`}>
             <span className="server-flag">
               {serverInfo.countryCode ? (
                 <img src={`https://flagcdn.com/24x18/${serverInfo.countryCode.toLowerCase()}.png`} alt={serverInfo.countryCode} />
@@ -852,7 +879,8 @@ export function App() {
                 </span>
                 {serverInfo.label}
               </strong>
-              <span>{serverInfo.latency === null ? '\u5ef6\u8fdf\uff1a\u672a\u8fde\u63a5' : `\u5ef6\u8fdf\uff1a${serverInfo.latency} ms`}</span>
+              <span>{latencyText}</span>
+              <span>{packetLossText}</span>
             </div>
           </div>
         </header>
