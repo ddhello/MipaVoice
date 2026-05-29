@@ -1,0 +1,31 @@
+services:
+  mipavoice:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mipavoice-server:latest
+    container_name: mipavoice-server
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      MIPAVOICE_BIND_ADDR: 0.0.0.0:3901
+      MIPAVOICE_DATABASE_URL: sqlite:///data/mipavoice.db
+      LIVEKIT_URL: ${LIVEKIT_URL:-ws://127.0.0.1:7880}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-secret}
+    volumes:
+      - mipavoice-data:/data
+    depends_on:
+      - livekit
+
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: mipavoice-livekit
+    restart: unless-stopped
+    network_mode: host
+    command: --config /etc/livekit/livekit.yaml
+    volumes:
+      - ./docker/livekit.yaml:/etc/livekit/livekit.yaml:ro
+
+volumes:
+  mipavoice-data:

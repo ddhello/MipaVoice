@@ -1,0 +1,13 @@
+target/
+dist/
+node_modules/
+web/dist/
+.bin/
+.logs/
+.git/
+*.db
+*.db-shm
+*.db-wal
+.env
+docker/.env
+_tmp_*
