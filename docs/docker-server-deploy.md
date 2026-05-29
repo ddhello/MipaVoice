@@ -15,6 +15,7 @@ MIPAVOICE_SFU_URL=/sfu
 MIPAVOICE_SFU_SECRET=replace-with-a-long-random-secret
 MIPAVOICE_SFU_PUBLIC_IP=YOUR_SERVER_PUBLIC_IP
 MIPAVOICE_SFU_UDP_PORT=50000
+MIPAVOICE_ICE_SERVERS=stun:stun.l.google.com:19302
 ```
 
 ## 启动
@@ -24,4 +25,4 @@ docker compose up -d --build
 docker compose logs -f mipavoice
 ```
 
-确认 `/health` 返回 `ok` 后，客户端即可连接后端并使用内置 SFU 通话。公网部署时需要在云安全组和系统防火墙放行 `50000/udp`。
+确认 `/health` 返回 `ok` 后，客户端即可连接后端并使用内置 SFU 通话。公网部署时需要在云安全组和系统防火墙放行 `50000/udp`。如果客户端在复杂 NAT 后面，建议配置 TURN，并通过 `MIPAVOICE_ICE_SERVERS`、`MIPAVOICE_ICE_USERNAME`、`MIPAVOICE_ICE_CREDENTIAL` 下发给客户端。

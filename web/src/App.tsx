@@ -624,6 +624,7 @@ export function App() {
         keyboardNoiseSuppression,
         aiNoiseSuppression,
         keyboardNoiseThreshold,
+        iceServers: joined.ice_servers,
       });
       voiceRef.current = voice;
       setActive({ channel, sessionId: joined.session_id });

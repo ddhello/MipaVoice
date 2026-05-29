@@ -64,6 +64,15 @@ struct SfuConfig {
     secret: String,
     public_ip: Option<String>,
     udp_port: u16,
+    ice_servers: Vec<IceServerDto>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IceServerDto {
+    urls: Vec<String>,
+    username: Option<String>,
+    credential: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -186,6 +195,7 @@ struct JoinChannelResponse {
     session_id: Uuid,
     username: String,
     sfu_url: String,
+    ice_servers: Vec<IceServerDto>,
     token: String,
 }
 
@@ -320,6 +330,7 @@ async fn build_state() -> anyhow::Result<AppState> {
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(50000),
+        ice_servers: parse_ice_servers(),
     };
     let sfu_udp_socket = tokio::net::UdpSocket::bind(("0.0.0.0", sfu.udp_port)).await?;
     let sfu_udp_mux =
@@ -614,6 +625,7 @@ async fn join_channel(
         session_id,
         username: username.to_string(),
         sfu_url: state.sfu.url.clone(),
+        ice_servers: state.sfu.ice_servers.clone(),
         token,
     }))
 }
@@ -1130,6 +1142,35 @@ fn validate_sfu_token(sfu: &SfuConfig, token: &str) -> Result<SfuClaims, ApiErro
     )
     .map(|data| data.claims)
     .map_err(|_| ApiError::Forbidden)
+}
+
+fn parse_ice_servers() -> Vec<IceServerDto> {
+    let urls = std::env::var("MIPAVOICE_ICE_SERVERS")
+        .unwrap_or_else(|_| "stun:stun.l.google.com:19302".into())
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+    if urls.is_empty() {
+        return Vec::new();
+    }
+
+    let username = std::env::var("MIPAVOICE_ICE_USERNAME")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let credential = std::env::var("MIPAVOICE_ICE_CREDENTIAL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    vec![IceServerDto {
+        urls,
+        username,
+        credential,
+    }]
 }
 
 async fn shutdown_signal() {

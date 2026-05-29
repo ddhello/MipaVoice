@@ -54,3 +54,5 @@ The backend reads these variables:
 - `MIPAVOICE_SFU_SECRET` defaults to `dev-secret-change-me`
 - `MIPAVOICE_SFU_PUBLIC_IP` should be set to the server public IP for internet deployment
 - `MIPAVOICE_SFU_UDP_PORT` defaults to `50000`
+- `MIPAVOICE_ICE_SERVERS` defaults to `stun:stun.l.google.com:19302`; use comma-separated URLs
+- `MIPAVOICE_ICE_USERNAME` and `MIPAVOICE_ICE_CREDENTIAL` are optional for TURN

@@ -31,6 +31,7 @@ export type JoinResponse = {
   session_id: string;
   username: string;
   sfu_url: string;
+  ice_servers?: RTCIceServer[];
   token: string;
 };
 

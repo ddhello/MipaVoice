@@ -93,6 +93,7 @@ export async function connectVoice(
     keyboardNoiseSuppression?: boolean;
     aiNoiseSuppression?: boolean;
     keyboardNoiseThreshold?: number;
+    iceServers?: RTCIceServer[];
   },
 ): Promise<VoiceConnection> {
   let currentInputDeviceId = devices?.inputDeviceId ?? '';
@@ -108,7 +109,11 @@ export async function connectVoice(
   const audioRoot = document.getElementById('audio-root');
   const attached = new Map<string, HTMLMediaElement>();
   const participantVolumes = new Map<string, number>();
-  const peer = new RTCPeerConnection();
+  const peer = new RTCPeerConnection({
+    iceServers: devices?.iceServers?.length
+      ? devices.iceServers
+      : [{ urls: 'stun:stun.l.google.com:19302' }],
+  });
   const socket = new WebSocket(signalingUrl(url, token));
 
   const sendSignal = (message: object) => {
