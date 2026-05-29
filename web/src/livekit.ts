@@ -1,5 +1,12 @@
 import { Room, RoomEvent, Track } from 'livekit-client';
-import type { AudioCaptureOptions, RemoteParticipant, RemoteTrack, RemoteTrackPublication } from 'livekit-client';
+import type {
+  AudioCaptureOptions,
+  LocalAudioTrack,
+  RemoteParticipant,
+  RemoteTrack,
+  RemoteTrackPublication,
+} from 'livekit-client';
+import { createKeyboardNoiseProcessor, isKeyboardNoiseProcessor } from './audioProcessing';
 
 export type VoiceConnection = {
   room: Room;
@@ -11,13 +18,34 @@ export type VoiceConnection = {
   setKeyboardNoiseSuppression: (enabled: boolean, inputDeviceId?: string) => Promise<void>;
 };
 
-export function getAudioCaptureOptions(inputDeviceId?: string, keyboardNoiseSuppression = true): AudioCaptureOptions {
+export function getAudioCaptureOptions(
+  inputDeviceId?: string,
+  keyboardNoiseSuppression = true,
+  includeProcessor = true,
+): AudioCaptureOptions {
   return {
     deviceId: inputDeviceId ? { exact: inputDeviceId } : { ideal: 'default' },
     autoGainControl: keyboardNoiseSuppression,
+    channelCount: { ideal: 1 },
     echoCancellation: keyboardNoiseSuppression,
+    latency: { ideal: 0.02 },
     noiseSuppression: keyboardNoiseSuppression,
+    sampleRate: { ideal: 48000 },
+    sampleSize: { ideal: 16 },
     voiceIsolation: keyboardNoiseSuppression,
+    processor: keyboardNoiseSuppression && includeProcessor ? createKeyboardNoiseProcessor() : undefined,
+    ...({
+      googAudioMirroring: false,
+      googAutoGainControl: keyboardNoiseSuppression,
+      googAutoGainControl2: keyboardNoiseSuppression,
+      googEchoCancellation: keyboardNoiseSuppression,
+      googEchoCancellation2: keyboardNoiseSuppression,
+      googHighpassFilter: keyboardNoiseSuppression,
+      googNoiseSuppression: keyboardNoiseSuppression,
+      googNoiseSuppression2: keyboardNoiseSuppression,
+      googTypingNoiseDetection: keyboardNoiseSuppression,
+      typingNoiseDetection: keyboardNoiseSuppression,
+    } as MediaTrackConstraints),
   };
 }
 
@@ -58,6 +86,26 @@ export async function connectVoice(
     audioRoot.appendChild(element);
   };
 
+  const getLocalMicrophoneTrack = () =>
+    room.localParticipant.getTrackPublication(Track.Source.Microphone)?.track as LocalAudioTrack | undefined;
+
+  const applyKeyboardNoiseSuppression = async () => {
+    const track = getLocalMicrophoneTrack();
+    if (!track) return;
+
+    track.mediaStreamTrack.contentHint = 'speech';
+    await track.restartTrack(getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression, false));
+
+    const processor = track.getProcessor();
+    if (keyboardNoiseSuppression) {
+      if (!isKeyboardNoiseProcessor(processor)) {
+        await track.setProcessor(createKeyboardNoiseProcessor());
+      }
+    } else if (isKeyboardNoiseProcessor(processor)) {
+      await track.stopProcessor();
+    }
+  };
+
   const detachAudio = (
     track: RemoteTrack,
     publication: RemoteTrackPublication,
@@ -92,6 +140,7 @@ export async function connectVoice(
     true,
     getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression),
   );
+  await applyKeyboardNoiseSuppression();
 
   return {
     room,
@@ -108,6 +157,9 @@ export async function connectVoice(
         !muted,
         getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression),
       );
+      if (!muted) {
+        await applyKeyboardNoiseSuppression();
+      }
     },
     setParticipantVolume: (identity: string, volume: number) => {
       const nextVolume = Math.max(0, Math.min(5, volume));
@@ -126,6 +178,9 @@ export async function connectVoice(
         !currentMuted,
         getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression),
       );
+      if (!currentMuted) {
+        await applyKeyboardNoiseSuppression();
+      }
     },
     switchOutput: async (deviceId: string) => {
       await room.switchActiveDevice('audiooutput', deviceId);
@@ -137,6 +192,9 @@ export async function connectVoice(
         !currentMuted,
         getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression),
       );
+      if (!currentMuted) {
+        await applyKeyboardNoiseSuppression();
+      }
     },
   };
 }

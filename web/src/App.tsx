@@ -483,7 +483,7 @@ export function App() {
 
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          audio: getAudioCaptureOptions(inputDeviceId, keyboardNoiseSuppression) as MediaTrackConstraints,
+          audio: getAudioCaptureOptions(inputDeviceId, keyboardNoiseSuppression, false) as MediaTrackConstraints,
         });
         if (disposed) return;
 
