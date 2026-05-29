@@ -739,6 +739,46 @@ h3 {
   line-height: 1.5;
 }
 
+.settings-toggle {
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #d9dfd8;
+  border-radius: 8px;
+  background: #f7faf7;
+}
+
+.settings-toggle input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: #28715d;
+}
+
+.settings-toggle__icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 8px;
+  color: #244f44;
+  background: #dceee5;
+}
+
+.settings-toggle strong,
+.settings-toggle small {
+  display: block;
+}
+
+.settings-toggle small {
+  margin-top: 3px;
+  color: #63716b;
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 600;
+}
+
 .toast {
   position: fixed;
   right: 18px;

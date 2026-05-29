@@ -1,5 +1,5 @@
 import { Room, RoomEvent, Track } from 'livekit-client';
-import type { RemoteParticipant, RemoteTrack, RemoteTrackPublication } from 'livekit-client';
+import type { AudioCaptureOptions, RemoteParticipant, RemoteTrack, RemoteTrackPublication } from 'livekit-client';
 
 export type VoiceConnection = {
   room: Room;
@@ -8,19 +8,34 @@ export type VoiceConnection = {
   setParticipantVolume: (identity: string, volume: number) => void;
   switchInput: (deviceId: string) => Promise<void>;
   switchOutput: (deviceId: string) => Promise<void>;
+  setKeyboardNoiseSuppression: (enabled: boolean, inputDeviceId?: string) => Promise<void>;
 };
+
+export function getAudioCaptureOptions(inputDeviceId?: string, keyboardNoiseSuppression = true): AudioCaptureOptions {
+  return {
+    deviceId: inputDeviceId ? { exact: inputDeviceId } : { ideal: 'default' },
+    autoGainControl: keyboardNoiseSuppression,
+    echoCancellation: keyboardNoiseSuppression,
+    noiseSuppression: keyboardNoiseSuppression,
+    voiceIsolation: keyboardNoiseSuppression,
+  };
+}
 
 export async function connectVoice(
   url: string,
   token: string,
   onStatus: (status: string) => void,
   onActiveSpeakers?: (identities: string[]) => void,
-  devices?: { inputDeviceId?: string; outputDeviceId?: string },
+  devices?: { inputDeviceId?: string; outputDeviceId?: string; keyboardNoiseSuppression?: boolean },
 ): Promise<VoiceConnection> {
+  let currentInputDeviceId = devices?.inputDeviceId ?? '';
+  let keyboardNoiseSuppression = devices?.keyboardNoiseSuppression ?? true;
+  let currentMuted = false;
   const room = new Room({
     adaptiveStream: true,
     dynacast: true,
     webAudioMix: true,
+    audioCaptureDefaults: getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression),
   });
 
   const audioRoot = document.getElementById('audio-root');
@@ -73,10 +88,10 @@ export async function connectVoice(
   if (devices?.outputDeviceId) {
     await room.switchActiveDevice('audiooutput', devices.outputDeviceId).catch(() => undefined);
   }
-  await room.localParticipant.setMicrophoneEnabled(true);
-  if (devices?.inputDeviceId) {
-    await room.switchActiveDevice('audioinput', devices.inputDeviceId);
-  }
+  await room.localParticipant.setMicrophoneEnabled(
+    true,
+    getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression),
+  );
 
   return {
     room,
@@ -88,7 +103,11 @@ export async function connectVoice(
       room.disconnect();
     },
     setMuted: async (muted: boolean) => {
-      await room.localParticipant.setMicrophoneEnabled(!muted);
+      currentMuted = muted;
+      await room.localParticipant.setMicrophoneEnabled(
+        !muted,
+        getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression),
+      );
     },
     setParticipantVolume: (identity: string, volume: number) => {
       const nextVolume = Math.max(0, Math.min(5, volume));
@@ -101,10 +120,23 @@ export async function connectVoice(
       }
     },
     switchInput: async (deviceId: string) => {
-      await room.switchActiveDevice('audioinput', deviceId);
+      currentInputDeviceId = deviceId === 'default' ? '' : deviceId;
+      await room.switchActiveDevice('audioinput', deviceId || 'default');
+      await room.localParticipant.setMicrophoneEnabled(
+        !currentMuted,
+        getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression),
+      );
     },
     switchOutput: async (deviceId: string) => {
       await room.switchActiveDevice('audiooutput', deviceId);
+    },
+    setKeyboardNoiseSuppression: async (enabled: boolean, inputDeviceId?: string) => {
+      keyboardNoiseSuppression = enabled;
+      currentInputDeviceId = inputDeviceId ?? currentInputDeviceId;
+      await room.localParticipant.setMicrophoneEnabled(
+        !currentMuted,
+        getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression),
+      );
     },
   };
 }

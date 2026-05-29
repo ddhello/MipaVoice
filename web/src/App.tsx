@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Hash,
   Headphones,
+  Keyboard,
   Lock,
   LogOut,
   Mic,
@@ -27,7 +28,7 @@ import {
   setApiBaseUrl,
   SnapshotEvent,
 } from './api';
-import { connectVoice, VoiceConnection } from './livekit';
+import { connectVoice, getAudioCaptureOptions, VoiceConnection } from './livekit';
 
 type ActiveVoice = {
   channel: Channel;
@@ -96,6 +97,8 @@ const text = {
   send: '\u53d1\u9001',
   kicked: '\u4f60\u5df2\u88ab\u9891\u9053\u521b\u5efa\u8005\u8e22\u51fa',
   localVolume: '\u672c\u5730\u63a5\u6536\u97f3\u91cf',
+  keyboardNoiseSuppression: '\u952e\u76d8\u58f0\u6d88\u9664',
+  keyboardNoiseSuppressionNote: '\u4f7f\u7528 WebRTC \u56de\u58f0\u6d88\u9664\u3001\u566a\u58f0\u6291\u5236\u548c\u8bed\u97f3\u9694\u79bb\uff0c\u5c3d\u91cf\u538b\u4f4e\u6572\u952e\u58f0\u3002',
 };
 
 function ownerTokensFromStorage() {
@@ -293,6 +296,9 @@ export function App() {
   const [devices, setDevices] = useState<AudioDevices>({ inputs: [], outputs: [] });
   const [inputDeviceId, setInputDeviceId] = useState(() => localStorage.getItem('mipavoice.inputDeviceId') ?? '');
   const [outputDeviceId, setOutputDeviceId] = useState(() => localStorage.getItem('mipavoice.outputDeviceId') ?? '');
+  const [keyboardNoiseSuppression, setKeyboardNoiseSuppression] = useState(
+    () => localStorage.getItem('mipavoice.keyboardNoiseSuppression') !== 'false',
+  );
   const [serverUrl, setServerUrl] = useState(() => localStorage.getItem('mipavoice.serverUrl') ?? '');
   const [serverDraft, setServerDraft] = useState(() => localStorage.getItem('mipavoice.serverUrl') ?? '');
   const [audioLevel, setAudioLevel] = useState(0);
@@ -477,7 +483,7 @@ export function App() {
 
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          audio: inputDeviceId ? { deviceId: { exact: inputDeviceId } } : true,
+          audio: getAudioCaptureOptions(inputDeviceId, keyboardNoiseSuppression) as MediaTrackConstraints,
         });
         if (disposed) return;
 
@@ -514,7 +520,7 @@ export function App() {
       stream?.getTracks().forEach((track) => track.stop());
       context?.close().catch(() => undefined);
     };
-  }, [active, inputDeviceId, muted]);
+  }, [active, inputDeviceId, keyboardNoiseSuppression, muted]);
 
   const saveOwnerTokens = (next: Record<string, string>) => {
     setOwnerTokens(next);
@@ -580,6 +586,7 @@ export function App() {
       const voice = await connectVoice(joined.livekit_url, joined.token, setVoiceStatus, setActiveSpeakers, {
         inputDeviceId,
         outputDeviceId,
+        keyboardNoiseSuppression,
       });
       voiceRef.current = voice;
       setActive({ channel, sessionId: joined.session_id });
@@ -649,6 +656,12 @@ export function App() {
     if (voiceRef.current) {
       await voiceRef.current.switchOutput(deviceId || 'default').catch(() => setError('\u5f53\u524d\u73af\u5883\u4e0d\u652f\u6301\u5207\u6362\u8f93\u51fa\u8bbe\u5907'));
     }
+  };
+
+  const toggleKeyboardNoiseSuppression = async (enabled: boolean) => {
+    setKeyboardNoiseSuppression(enabled);
+    localStorage.setItem('mipavoice.keyboardNoiseSuppression', String(enabled));
+    await voiceRef.current?.setKeyboardNoiseSuppression(enabled, inputDeviceId).catch((err) => setError(err.message));
   };
 
   const setRemoteVolume = (identity: string, volume: number) => {
@@ -999,6 +1012,20 @@ export function App() {
                 </option>
               ))}
             </select>
+          </label>
+          <label className="settings-toggle">
+            <input
+              type="checkbox"
+              checked={keyboardNoiseSuppression}
+              onChange={(event) => void toggleKeyboardNoiseSuppression(event.target.checked)}
+            />
+            <span className="settings-toggle__icon">
+              <Keyboard size={18} />
+            </span>
+            <span>
+              <strong>{text.keyboardNoiseSuppression}</strong>
+              <small>{text.keyboardNoiseSuppressionNote}</small>
+            </span>
           </label>
           <p className="settings-note">{text.deviceNote}</p>
         </Dialog>
