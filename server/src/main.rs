@@ -4,7 +4,10 @@ use std::{
     net::SocketAddr,
     pin::Pin,
     str::FromStr,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 
@@ -38,8 +41,8 @@ use webrtc::{
         ice_candidate_type::RTCIceCandidateType,
     },
     peer_connection::{
-        configuration::RTCConfiguration, sdp::session_description::RTCSessionDescription,
-        RTCPeerConnection,
+        configuration::RTCConfiguration, peer_connection_state::RTCPeerConnectionState,
+        sdp::session_description::RTCSessionDescription, RTCPeerConnection,
     },
     rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTPCodecType},
     track::{
@@ -94,6 +97,7 @@ struct SfuPeer {
     pc: Arc<RTCPeerConnection>,
     outbound: mpsc::UnboundedSender<SfuOutboundSignal>,
     published_track: Mutex<Option<Arc<TrackLocalStaticRTP>>>,
+    closed: AtomicBool,
 }
 
 #[derive(Deserialize)]
@@ -110,6 +114,10 @@ enum SfuInboundSignal {
     Answer { sdp: String },
     #[serde(rename = "candidate")]
     Candidate { candidate: RTCIceCandidateInit },
+    #[serde(rename = "disconnect")]
+    Disconnect,
+    #[serde(rename = "ping")]
+    Ping,
 }
 
 #[derive(Clone, Serialize)]
@@ -321,7 +329,8 @@ async fn build_state() -> anyhow::Result<AppState> {
 
     let sfu = SfuConfig {
         url: std::env::var("MIPAVOICE_SFU_URL").unwrap_or_else(|_| "/sfu".into()),
-        secret: std::env::var("MIPAVOICE_SFU_SECRET").unwrap_or_else(|_| "dev-secret-change-me".into()),
+        secret: std::env::var("MIPAVOICE_SFU_SECRET")
+            .unwrap_or_else(|_| "dev-secret-change-me".into()),
         public_ip: std::env::var("MIPAVOICE_SFU_PUBLIC_IP")
             .ok()
             .map(|value| value.trim().to_string())
@@ -730,7 +739,8 @@ async fn sfu_handler(
 
 async fn sfu_socket(mut socket: WebSocket, state: AppState, claims: SfuClaims) {
     let (outbound, mut outbound_rx) = mpsc::unbounded_channel();
-    let peer = match create_sfu_peer(&state.sfu, state.sfu_udp_mux.clone(), &claims, outbound).await {
+    let peer = match create_sfu_peer(&state.sfu, state.sfu_udp_mux.clone(), &claims, outbound).await
+    {
         Ok(peer) => peer,
         Err(err) => {
             tracing::warn!("failed to create SFU peer: {err}");
@@ -743,6 +753,28 @@ async fn sfu_socket(mut socket: WebSocket, state: AppState, claims: SfuClaims) {
         let _ = peer.pc.close().await;
         return;
     }
+
+    let rooms = state.sfu_rooms.clone();
+    let peer_for_state = peer.clone();
+    peer.pc
+        .on_peer_connection_state_change(Box::new(move |connection_state| {
+            let rooms = rooms.clone();
+            let peer = peer_for_state.clone();
+            Box::pin(async move {
+                tracing::debug!(
+                    identity = %peer.identity,
+                    room = %peer.room,
+                    state = ?connection_state,
+                    "SFU peer connection state changed"
+                );
+                if matches!(
+                    connection_state,
+                    RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed
+                ) {
+                    cleanup_sfu_peer(rooms, peer).await;
+                }
+            })
+        }));
 
     loop {
         tokio::select! {
@@ -777,8 +809,11 @@ async fn sfu_socket(mut socket: WebSocket, state: AppState, claims: SfuClaims) {
         }
     }
 
-    state.sfu_rooms.leave(&peer).await;
-    let _ = peer.pc.close().await;
+    tracing::debug!(
+        identity = %peer.identity,
+        room = %peer.room,
+        "SFU signaling socket closed"
+    );
 }
 
 async fn create_sfu_peer(
@@ -822,7 +857,17 @@ async fn create_sfu_peer(
         pc,
         outbound,
         published_track: Mutex::new(None),
+        closed: AtomicBool::new(false),
     }))
+}
+
+async fn cleanup_sfu_peer(rooms: Arc<SfuRooms>, peer: Arc<SfuPeer>) {
+    if peer.closed.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    rooms.leave(&peer).await;
+    let _ = peer.pc.close().await;
 }
 
 async fn handle_sfu_signal(
@@ -861,6 +906,10 @@ async fn handle_sfu_signal(
         SfuInboundSignal::Candidate { candidate } => {
             peer.pc.add_ice_candidate(candidate).await?;
         }
+        SfuInboundSignal::Disconnect => {
+            cleanup_sfu_peer(rooms.clone(), peer.clone()).await;
+        }
+        SfuInboundSignal::Ping => {}
     }
 
     Ok(())
@@ -976,7 +1025,9 @@ async fn renegotiate_peer(peer: Arc<SfuPeer>) {
             }
             let _ = gather_complete.recv().await;
             if let Some(offer) = peer.pc.local_description().await {
-                let _ = peer.outbound.send(SfuOutboundSignal::Offer { sdp: offer.sdp });
+                let _ = peer
+                    .outbound
+                    .send(SfuOutboundSignal::Offer { sdp: offer.sdp });
             }
         }
         Err(err) => tracing::warn!("failed to create renegotiation offer: {err}"),
@@ -1114,11 +1165,7 @@ fn validate_channel_password(channel: &ChannelRow, password: Option<&str>) -> Re
     }
 }
 
-fn sfu_token(
-    sfu: &SfuConfig,
-    channel: &ChannelRow,
-    username: &str,
-) -> Result<String, ApiError> {
+fn sfu_token(sfu: &SfuConfig, channel: &ChannelRow, username: &str) -> Result<String, ApiError> {
     let claims = SfuClaims {
         sub: username.to_string(),
         name: username.to_string(),
@@ -1131,7 +1178,7 @@ fn sfu_token(
         &claims,
         &EncodingKey::from_secret(sfu.secret.as_bytes()),
     )
-        .map_err(|err| ApiError::Token(err.to_string()))
+    .map_err(|err| ApiError::Token(err.to_string()))
 }
 
 fn validate_sfu_token(sfu: &SfuConfig, token: &str) -> Result<SfuClaims, ApiError> {

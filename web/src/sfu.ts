@@ -109,6 +109,8 @@ export async function connectVoice(
   const audioRoot = document.getElementById('audio-root');
   const attached = new Map<string, HTMLMediaElement>();
   const participantVolumes = new Map<string, number>();
+  let closing = false;
+  let keepaliveTimer: number | undefined;
   const peer = new RTCPeerConnection({
     iceServers: devices?.iceServers?.length
       ? devices.iceServers
@@ -117,6 +119,7 @@ export async function connectVoice(
   const socket = new WebSocket(signalingUrl(url, token));
 
   const sendSignal = (message: object) => {
+    if (socket.readyState !== WebSocket.OPEN) return;
     socket.send(JSON.stringify(message));
   };
 
@@ -205,6 +208,12 @@ export async function connectVoice(
     if (peer.connectionState === 'disconnected' || peer.connectionState === 'failed') onStatus('已断开');
   };
 
+  socket.onclose = () => {
+    if (!closing && peer.connectionState !== 'connected') {
+      onStatus('已断开');
+    }
+  };
+
   peer.ontrack = (event) => {
     if (!audioRoot || event.track.kind !== 'audio') return;
 
@@ -223,6 +232,7 @@ export async function connectVoice(
 
   onStatus('正在连接');
   await waitForSocket(socket);
+  keepaliveTimer = window.setInterval(() => sendSignal({ type: 'ping' }), 10000);
   const microphoneTrack = await buildMicrophoneTrack();
   peer.addTrack(microphoneTrack, new MediaStream([microphoneTrack]));
   peer.addTransceiver('audio', { direction: 'recvonly' });
@@ -234,10 +244,15 @@ export async function connectVoice(
 
   return {
     disconnect: () => {
+      closing = true;
+      if (keepaliveTimer !== undefined) {
+        window.clearInterval(keepaliveTimer);
+      }
       for (const element of attached.values()) {
         element.remove();
       }
       attached.clear();
+      sendSignal({ type: 'disconnect' });
       socket.close();
       peer.close();
       localRawTrack?.stop();
