@@ -6,11 +6,27 @@ type AudioNodeChain = {
   highPass: BiquadFilterNode;
   lowPass: BiquadFilterNode;
   compressor: DynamicsCompressorNode;
+  rnnoise?: AudioWorkletNode;
   gate: ScriptProcessorNode;
   destination: MediaStreamAudioDestinationNode;
 };
 
 const PROCESSOR_NAME = 'mipavoice-keyboard-noise-suppression';
+const rnnoiseWorkletUrl = new URL('./rnnoiseWorklet.js', import.meta.url);
+const rnnoiseModulePromises = new WeakMap<AudioContext, Promise<void>>();
+
+function loadRnnoiseWorklet(audioContext: AudioContext) {
+  if (!audioContext.audioWorklet) {
+    return Promise.reject(new Error('AudioWorklet is not supported'));
+  }
+
+  let promise = rnnoiseModulePromises.get(audioContext);
+  if (!promise) {
+    promise = audioContext.audioWorklet.addModule(rnnoiseWorkletUrl);
+    rnnoiseModulePromises.set(audioContext, promise);
+  }
+  return promise;
+}
 
 export function createKeyboardNoiseProcessor(): TrackProcessor<Track.Kind.Audio, AudioProcessorOptions> {
   let chain: AudioNodeChain | null = null;
@@ -31,6 +47,7 @@ export function createKeyboardNoiseProcessor(): TrackProcessor<Track.Kind.Audio,
       chain.highPass.disconnect();
       chain.lowPass.disconnect();
       chain.compressor.disconnect();
+      chain.rnnoise?.disconnect();
       chain.gate.disconnect();
       chain.destination.disconnect();
       chain = null;
@@ -60,6 +77,18 @@ export function createKeyboardNoiseProcessor(): TrackProcessor<Track.Kind.Audio,
     compressor.ratio.value = 8;
     compressor.attack.value = 0.004;
     compressor.release.value = 0.18;
+
+    let rnnoise: AudioWorkletNode | undefined;
+    try {
+      await loadRnnoiseWorklet(audioContext);
+      rnnoise = new AudioWorkletNode(audioContext, 'mipavoice-rnnoise', {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+      });
+    } catch {
+      rnnoise = undefined;
+    }
 
     const gate = audioContext.createScriptProcessor(1024, 1, 1);
     const destination = audioContext.createMediaStreamDestination();
@@ -108,10 +137,15 @@ export function createKeyboardNoiseProcessor(): TrackProcessor<Track.Kind.Audio,
     source.connect(highPass);
     highPass.connect(lowPass);
     lowPass.connect(compressor);
-    compressor.connect(gate);
+    if (rnnoise) {
+      compressor.connect(rnnoise);
+      rnnoise.connect(gate);
+    } else {
+      compressor.connect(gate);
+    }
     gate.connect(destination);
 
-    chain = { source, highPass, lowPass, compressor, gate, destination };
+    chain = { source, highPass, lowPass, compressor, rnnoise, gate, destination };
     processedTrack = destination.stream.getAudioTracks()[0];
     if (processedTrack) {
       processedTrack.contentHint = 'speech';

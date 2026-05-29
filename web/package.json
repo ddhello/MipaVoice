@@ -10,6 +10,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@jitsi/rnnoise-wasm": "^0.2.1",
     "@tauri-apps/api": "^2.8.0",
     "livekit-client": "^2.15.10",
     "lucide-react": "^0.468.0",

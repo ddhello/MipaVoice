@@ -14,6 +14,9 @@ importers:
 
   web:
     dependencies:
+      '@jitsi/rnnoise-wasm':
+        specifier: ^0.2.1
+        version: 0.2.1
       '@tauri-apps/api':
         specifier: ^2.8.0
         version: 2.11.0
@@ -289,6 +292,9 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@jitsi/rnnoise-wasm@0.2.1':
+    resolution: {integrity: sha512-iEj77www43pS2Yq+cfLZb+hFuI7L5ccisBzzPMcOjjLsG4/LAlkD1CY58/8gc84nHdLBGmD/OPIWGnvYnXvB0A==}
 
   '@jridgewell/gen-mapping@0.3.13':
     resolution: {integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==}
@@ -971,6 +977,8 @@ snapshots:
 
   '@esbuild/win32-x64@0.25.12':
     optional: true
+
+  '@jitsi/rnnoise-wasm@0.2.1': {}
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
