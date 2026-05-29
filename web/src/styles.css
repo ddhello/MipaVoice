@@ -756,6 +756,10 @@ h3 {
   accent-color: #28715d;
 }
 
+.settings-toggle.disabled {
+  opacity: 0.6;
+}
+
 .settings-toggle__icon {
   display: grid;
   width: 32px;

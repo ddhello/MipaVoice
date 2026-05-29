@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Brain,
   Hash,
   Headphones,
   Keyboard,
@@ -98,7 +99,9 @@ const text = {
   kicked: '\u4f60\u5df2\u88ab\u9891\u9053\u521b\u5efa\u8005\u8e22\u51fa',
   localVolume: '\u672c\u5730\u63a5\u6536\u97f3\u91cf',
   keyboardNoiseSuppression: '\u952e\u76d8\u58f0\u6d88\u9664',
-  keyboardNoiseSuppressionNote: '\u4f7f\u7528 WebRTC \u964d\u566a\u3001RNNoise AI \u6a21\u578b\u548c\u672c\u5730\u97f3\u9891\u5904\u7406\uff0c\u5c3d\u91cf\u538b\u4f4e\u6572\u952e\u58f0\u3002',
+  keyboardNoiseSuppressionNote: '\u4f7f\u7528 WebRTC \u964d\u566a\u548c\u672c\u5730\u97f3\u9891\u5904\u7406\uff0c\u5c3d\u91cf\u538b\u4f4e\u6572\u952e\u58f0\u3002',
+  aiNoiseSuppression: 'AI \u964d\u566a',
+  aiNoiseSuppressionNote: '\u53e0\u52a0 RNNoise \u8f7b\u91cf AI \u6a21\u578b\uff0c\u5bf9\u952e\u76d8\u548c\u80cc\u666f\u566a\u58f0\u66f4\u5f3a\uff0c\u4f46\u53ef\u80fd\u8ba9\u4eba\u58f0\u66f4\u50cf\u901a\u8bdd\u97f3\u8d28\u3002',
 };
 
 function ownerTokensFromStorage() {
@@ -298,6 +301,9 @@ export function App() {
   const [outputDeviceId, setOutputDeviceId] = useState(() => localStorage.getItem('mipavoice.outputDeviceId') ?? '');
   const [keyboardNoiseSuppression, setKeyboardNoiseSuppression] = useState(
     () => localStorage.getItem('mipavoice.keyboardNoiseSuppression') !== 'false',
+  );
+  const [aiNoiseSuppression, setAiNoiseSuppression] = useState(
+    () => localStorage.getItem('mipavoice.aiNoiseSuppression') !== 'false',
   );
   const [serverUrl, setServerUrl] = useState(() => localStorage.getItem('mipavoice.serverUrl') ?? '');
   const [serverDraft, setServerDraft] = useState(() => localStorage.getItem('mipavoice.serverUrl') ?? '');
@@ -587,6 +593,7 @@ export function App() {
         inputDeviceId,
         outputDeviceId,
         keyboardNoiseSuppression,
+        aiNoiseSuppression,
       });
       voiceRef.current = voice;
       setActive({ channel, sessionId: joined.session_id });
@@ -662,6 +669,12 @@ export function App() {
     setKeyboardNoiseSuppression(enabled);
     localStorage.setItem('mipavoice.keyboardNoiseSuppression', String(enabled));
     await voiceRef.current?.setKeyboardNoiseSuppression(enabled, inputDeviceId).catch((err) => setError(err.message));
+  };
+
+  const toggleAiNoiseSuppression = async (enabled: boolean) => {
+    setAiNoiseSuppression(enabled);
+    localStorage.setItem('mipavoice.aiNoiseSuppression', String(enabled));
+    await voiceRef.current?.setAiNoiseSuppression(enabled).catch((err) => setError(err.message));
   };
 
   const setRemoteVolume = (identity: string, volume: number) => {
@@ -1025,6 +1038,21 @@ export function App() {
             <span>
               <strong>{text.keyboardNoiseSuppression}</strong>
               <small>{text.keyboardNoiseSuppressionNote}</small>
+            </span>
+          </label>
+          <label className={`settings-toggle ${!keyboardNoiseSuppression ? 'disabled' : ''}`}>
+            <input
+              type="checkbox"
+              checked={aiNoiseSuppression}
+              disabled={!keyboardNoiseSuppression}
+              onChange={(event) => void toggleAiNoiseSuppression(event.target.checked)}
+            />
+            <span className="settings-toggle__icon">
+              <Brain size={18} />
+            </span>
+            <span>
+              <strong>{text.aiNoiseSuppression}</strong>
+              <small>{text.aiNoiseSuppressionNote}</small>
             </span>
           </label>
           <p className="settings-note">{text.deviceNote}</p>

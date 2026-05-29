@@ -16,12 +16,14 @@ export type VoiceConnection = {
   switchInput: (deviceId: string) => Promise<void>;
   switchOutput: (deviceId: string) => Promise<void>;
   setKeyboardNoiseSuppression: (enabled: boolean, inputDeviceId?: string) => Promise<void>;
+  setAiNoiseSuppression: (enabled: boolean) => Promise<void>;
 };
 
 export function getAudioCaptureOptions(
   inputDeviceId?: string,
   keyboardNoiseSuppression = true,
   includeProcessor = true,
+  aiNoiseSuppression = true,
 ): AudioCaptureOptions {
   return {
     deviceId: inputDeviceId ? { exact: inputDeviceId } : { ideal: 'default' },
@@ -33,7 +35,10 @@ export function getAudioCaptureOptions(
     sampleRate: { ideal: 48000 },
     sampleSize: { ideal: 16 },
     voiceIsolation: keyboardNoiseSuppression,
-    processor: keyboardNoiseSuppression && includeProcessor ? createKeyboardNoiseProcessor() : undefined,
+    processor:
+      keyboardNoiseSuppression && includeProcessor
+        ? createKeyboardNoiseProcessor(aiNoiseSuppression)
+        : undefined,
     ...({
       googAudioMirroring: false,
       googAutoGainControl: keyboardNoiseSuppression,
@@ -54,10 +59,16 @@ export async function connectVoice(
   token: string,
   onStatus: (status: string) => void,
   onActiveSpeakers?: (identities: string[]) => void,
-  devices?: { inputDeviceId?: string; outputDeviceId?: string; keyboardNoiseSuppression?: boolean },
+  devices?: {
+    inputDeviceId?: string;
+    outputDeviceId?: string;
+    keyboardNoiseSuppression?: boolean;
+    aiNoiseSuppression?: boolean;
+  },
 ): Promise<VoiceConnection> {
   let currentInputDeviceId = devices?.inputDeviceId ?? '';
   let keyboardNoiseSuppression = devices?.keyboardNoiseSuppression ?? true;
+  let aiNoiseSuppression = devices?.aiNoiseSuppression ?? true;
   let currentMuted = false;
   const room = new Room({
     adaptiveStream: true,
@@ -99,7 +110,7 @@ export async function connectVoice(
     const processor = track.getProcessor();
     if (keyboardNoiseSuppression) {
       if (!isKeyboardNoiseProcessor(processor)) {
-        await track.setProcessor(createKeyboardNoiseProcessor());
+        await track.setProcessor(createKeyboardNoiseProcessor(aiNoiseSuppression));
       }
     } else if (isKeyboardNoiseProcessor(processor)) {
       await track.stopProcessor();
@@ -193,6 +204,16 @@ export async function connectVoice(
         getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression, false),
       );
       if (!currentMuted) {
+        await applyKeyboardNoiseSuppression();
+      }
+    },
+    setAiNoiseSuppression: async (enabled: boolean) => {
+      aiNoiseSuppression = enabled;
+      if (!currentMuted) {
+        const processor = getLocalMicrophoneTrack()?.getProcessor();
+        if (isKeyboardNoiseProcessor(processor)) {
+          await getLocalMicrophoneTrack()?.stopProcessor();
+        }
         await applyKeyboardNoiseSuppression();
       }
     },

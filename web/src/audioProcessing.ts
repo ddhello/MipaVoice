@@ -28,7 +28,7 @@ function loadRnnoiseWorklet(audioContext: AudioContext) {
   return promise;
 }
 
-export function createKeyboardNoiseProcessor(): TrackProcessor<Track.Kind.Audio, AudioProcessorOptions> {
+export function createKeyboardNoiseProcessor(useRnnoise = true): TrackProcessor<Track.Kind.Audio, AudioProcessorOptions> {
   let chain: AudioNodeChain | null = null;
   let processedTrack: MediaStreamTrack | undefined;
   let gateGain = 0;
@@ -79,15 +79,17 @@ export function createKeyboardNoiseProcessor(): TrackProcessor<Track.Kind.Audio,
     compressor.release.value = 0.18;
 
     let rnnoise: AudioWorkletNode | undefined;
-    try {
-      await loadRnnoiseWorklet(audioContext);
-      rnnoise = new AudioWorkletNode(audioContext, 'mipavoice-rnnoise', {
-        numberOfInputs: 1,
-        numberOfOutputs: 1,
-        outputChannelCount: [1],
-      });
-    } catch {
-      rnnoise = undefined;
+    if (useRnnoise) {
+      try {
+        await loadRnnoiseWorklet(audioContext);
+        rnnoise = new AudioWorkletNode(audioContext, 'mipavoice-rnnoise', {
+          numberOfInputs: 1,
+          numberOfOutputs: 1,
+          outputChannelCount: [1],
+        });
+      } catch {
+        rnnoise = undefined;
+      }
     }
 
     const gate = audioContext.createScriptProcessor(1024, 1, 1);
