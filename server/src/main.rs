@@ -435,6 +435,19 @@ async fn list_channels(State(state): State<AppState>) -> Result<Json<Vec<Channel
     Ok(Json(channel_dtos(&state).await?))
 }
 
+fn log_sfu_sdp_candidates(label: &str, identity: &str, room: &str, sdp: &str) {
+    for line in sdp.lines() {
+        if line == "a=ice-lite" || line.starts_with("a=candidate:") {
+            tracing::info!(
+                identity = %identity,
+                room = %room,
+                candidate = %line,
+                "{label}"
+            );
+        }
+    }
+}
+
 async fn create_channel(
     State(state): State<AppState>,
     Json(payload): Json<CreateChannelRequest>,
@@ -852,6 +865,10 @@ async fn create_sfu_peer(
             };
             match candidate.to_json() {
                 Ok(candidate) => {
+                    tracing::info!(
+                        candidate = %candidate.candidate,
+                        "SFU sending trickle candidate"
+                    );
                     let _ = candidate_outbound.send(SfuOutboundSignal::Candidate { candidate });
                 }
                 Err(err) => tracing::warn!("failed to encode ICE candidate: {err}"),
@@ -907,6 +924,12 @@ async fn handle_sfu_signal(
             peer.pc.set_local_description(answer).await?;
             let _ = gather_complete.recv().await;
             if let Some(answer) = peer.pc.local_description().await {
+                log_sfu_sdp_candidates(
+                    "SFU answer SDP candidate",
+                    &peer.identity,
+                    &peer.room,
+                    &answer.sdp,
+                );
                 let _ = peer
                     .outbound
                     .send(SfuOutboundSignal::Answer { sdp: answer.sdp });
@@ -917,6 +940,12 @@ async fn handle_sfu_signal(
             peer.pc.set_remote_description(answer).await?;
         }
         SfuInboundSignal::Candidate { candidate } => {
+            tracing::info!(
+                identity = %peer.identity,
+                room = %peer.room,
+                candidate = %candidate.candidate,
+                "SFU received client candidate"
+            );
             peer.pc.add_ice_candidate(candidate).await?;
         }
         SfuInboundSignal::Disconnect => {
