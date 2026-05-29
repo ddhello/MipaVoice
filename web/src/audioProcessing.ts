@@ -33,13 +33,19 @@ function loadRnnoiseWorklet(audioContext: AudioContext) {
   return promise;
 }
 
-export function createKeyboardNoiseProcessor(useRnnoise = true): KeyboardNoiseProcessor {
+export function createKeyboardNoiseProcessor(useRnnoise = true, keyboardNoiseThreshold = 50): KeyboardNoiseProcessor {
   let chain: AudioNodeChain | null = null;
   let processedTrack: MediaStreamTrack | undefined;
   let gateGain = 0;
   let holdFrames = 0;
   let noiseFloor = 0.008;
   let rnnoiseError: string | undefined;
+  let ownedAudioContext: AudioContext | undefined;
+  const threshold = Math.max(0, Math.min(100, keyboardNoiseThreshold)) / 100;
+  const clickPeakThreshold = 0.006 + threshold * 0.036;
+  const clickRmsCeiling = 0.24 - threshold * 0.14;
+  const clickZeroCrossingThreshold = 0.16 + threshold * 0.12;
+  const clickCrestFactorThreshold = 4.2 + threshold * 3;
 
   const destroy = async () => {
     if (processedTrack) {
@@ -58,6 +64,8 @@ export function createKeyboardNoiseProcessor(useRnnoise = true): KeyboardNoisePr
       chain.destination.disconnect();
       chain = null;
     }
+    await ownedAudioContext?.close().catch(() => undefined);
+    ownedAudioContext = undefined;
   };
 
   const init = async ({ audioContext, track }: AudioProcessorOptions) => {
@@ -65,19 +73,24 @@ export function createKeyboardNoiseProcessor(useRnnoise = true): KeyboardNoisePr
 
     track.contentHint = 'speech';
 
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    const context = audioContext ?? new AudioContextClass({ latencyHint: 'interactive' });
+    if (!audioContext) {
+      ownedAudioContext = context;
+    }
     const inputStream = new MediaStream([track]);
-    const source = audioContext.createMediaStreamSource(inputStream);
-    const highPass = audioContext.createBiquadFilter();
+    const source = context.createMediaStreamSource(inputStream);
+    const highPass = context.createBiquadFilter();
     highPass.type = 'highpass';
     highPass.frequency.value = 130;
     highPass.Q.value = 0.7;
 
-    const lowPass = audioContext.createBiquadFilter();
+    const lowPass = context.createBiquadFilter();
     lowPass.type = 'lowpass';
     lowPass.frequency.value = 4200;
     lowPass.Q.value = 0.65;
 
-    const compressor = audioContext.createDynamicsCompressor();
+    const compressor = context.createDynamicsCompressor();
     compressor.threshold.value = -34;
     compressor.knee.value = 16;
     compressor.ratio.value = 8;
@@ -87,8 +100,8 @@ export function createKeyboardNoiseProcessor(useRnnoise = true): KeyboardNoisePr
     let rnnoise: AudioWorkletNode | undefined;
     if (useRnnoise) {
       try {
-        await loadRnnoiseWorklet(audioContext);
-        rnnoise = new AudioWorkletNode(audioContext, 'mipavoice-rnnoise', {
+        await loadRnnoiseWorklet(context);
+        rnnoise = new AudioWorkletNode(context, 'mipavoice-rnnoise', {
           numberOfInputs: 1,
           numberOfOutputs: 1,
           outputChannelCount: [1],
@@ -102,8 +115,8 @@ export function createKeyboardNoiseProcessor(useRnnoise = true): KeyboardNoisePr
       rnnoiseError = undefined;
     }
 
-    const gate = audioContext.createScriptProcessor(1024, 1, 1);
-    const destination = audioContext.createMediaStreamDestination();
+    const gate = context.createScriptProcessor(1024, 1, 1);
+    const destination = context.createMediaStreamDestination();
 
     gate.onaudioprocess = (event) => {
       const input = event.inputBuffer.getChannelData(0);
@@ -134,9 +147,9 @@ export function createKeyboardNoiseProcessor(useRnnoise = true): KeyboardNoisePr
       const openThreshold = Math.max(0.018, noiseFloor * 3.2);
       const likelyKeyboardClick =
         holdFrames === 0 &&
-        peak > 0.018 &&
-        rms < 0.18 &&
-        (zeroCrossingRate > 0.2 || crestFactor > 5.5);
+        peak > clickPeakThreshold &&
+        rms < clickRmsCeiling &&
+        (zeroCrossingRate > clickZeroCrossingThreshold || crestFactor > clickCrestFactorThreshold);
       const shouldOpen = rms > openThreshold && !likelyKeyboardClick;
 
       if (shouldOpen) {

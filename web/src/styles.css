@@ -749,6 +749,16 @@ h3 {
   background: #f7faf7;
 }
 
+.settings-slider {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px 12px;
+  padding: 10px 12px;
+  border: 1px solid #d9dfd8;
+  border-radius: 8px;
+  background: #f7faf7;
+}
+
 .settings-toggle input {
   width: 18px;
   height: 18px;
@@ -756,7 +766,8 @@ h3 {
   accent-color: #28715d;
 }
 
-.settings-toggle.disabled {
+.settings-toggle.disabled,
+.settings-slider.disabled {
   opacity: 0.6;
 }
 
@@ -771,16 +782,33 @@ h3 {
 }
 
 .settings-toggle strong,
-.settings-toggle small {
+.settings-toggle small,
+.settings-slider strong,
+.settings-slider small {
   display: block;
 }
 
-.settings-toggle small {
+.settings-toggle small,
+.settings-slider small {
   margin-top: 3px;
   color: #63716b;
   font-size: 12px;
   line-height: 1.4;
   font-weight: 600;
+}
+
+.settings-slider output {
+  min-width: 34px;
+  color: #244f44;
+  font-size: 13px;
+  font-weight: 900;
+  text-align: right;
+}
+
+.settings-slider input[type='range'] {
+  grid-column: 1 / -1;
+  width: 100%;
+  accent-color: #28715d;
 }
 
 .toast {

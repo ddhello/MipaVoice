@@ -17,6 +17,7 @@ export type VoiceConnection = {
   switchOutput: (deviceId: string) => Promise<void>;
   setKeyboardNoiseSuppression: (enabled: boolean, inputDeviceId?: string) => Promise<void>;
   setAiNoiseSuppression: (enabled: boolean) => Promise<void>;
+  setKeyboardNoiseThreshold: (threshold: number) => Promise<void>;
   getPublishedMicrophoneTrack: () => MediaStreamTrack | undefined;
 };
 
@@ -25,6 +26,7 @@ export function getAudioCaptureOptions(
   keyboardNoiseSuppression = true,
   includeProcessor = true,
   aiNoiseSuppression = true,
+  keyboardNoiseThreshold = 50,
 ): AudioCaptureOptions {
   return {
     deviceId: inputDeviceId ? { exact: inputDeviceId } : { ideal: 'default' },
@@ -38,7 +40,7 @@ export function getAudioCaptureOptions(
     voiceIsolation: keyboardNoiseSuppression,
     processor:
       keyboardNoiseSuppression && includeProcessor
-        ? createKeyboardNoiseProcessor(aiNoiseSuppression)
+        ? createKeyboardNoiseProcessor(aiNoiseSuppression, keyboardNoiseThreshold)
         : undefined,
     ...({
       googAudioMirroring: false,
@@ -65,11 +67,13 @@ export async function connectVoice(
     outputDeviceId?: string;
     keyboardNoiseSuppression?: boolean;
     aiNoiseSuppression?: boolean;
+    keyboardNoiseThreshold?: number;
   },
 ): Promise<VoiceConnection> {
   let currentInputDeviceId = devices?.inputDeviceId ?? '';
   let keyboardNoiseSuppression = devices?.keyboardNoiseSuppression ?? true;
   let aiNoiseSuppression = devices?.aiNoiseSuppression ?? true;
+  let keyboardNoiseThreshold = devices?.keyboardNoiseThreshold ?? 50;
   let currentMuted = false;
   const room = new Room({
     adaptiveStream: true,
@@ -101,21 +105,40 @@ export async function connectVoice(
   const getLocalMicrophoneTrack = () =>
     room.localParticipant.getTrackPublication(Track.Source.Microphone)?.track as LocalAudioTrack | undefined;
 
+  const createNoiseProcessor = () => createKeyboardNoiseProcessor(aiNoiseSuppression, keyboardNoiseThreshold);
+
   const applyKeyboardNoiseSuppression = async () => {
     const track = getLocalMicrophoneTrack();
     if (!track) return;
 
+    const processor = track.getProcessor();
+
+    if (!keyboardNoiseSuppression) {
+      if (isKeyboardNoiseProcessor(processor)) {
+        await track.stopProcessor();
+      }
+      track.mediaStreamTrack.contentHint = 'speech';
+      await track.restartTrack(getAudioCaptureOptions(currentInputDeviceId, false, false));
+      return;
+    }
+
     track.mediaStreamTrack.contentHint = 'speech';
-    await track.restartTrack(getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression, false));
+    await track.restartTrack(getAudioCaptureOptions(currentInputDeviceId, true, false));
+
+    if (!isKeyboardNoiseProcessor(track.getProcessor())) {
+      await track.setProcessor(createNoiseProcessor());
+    }
+  };
+
+  const rebuildKeyboardNoiseProcessor = async () => {
+    const track = getLocalMicrophoneTrack();
+    if (!track || !keyboardNoiseSuppression) return;
 
     const processor = track.getProcessor();
-    if (keyboardNoiseSuppression) {
-      if (!isKeyboardNoiseProcessor(processor)) {
-        await track.setProcessor(createKeyboardNoiseProcessor(aiNoiseSuppression));
-      }
-    } else if (isKeyboardNoiseProcessor(processor)) {
+    if (isKeyboardNoiseProcessor(processor)) {
       await track.stopProcessor();
     }
+    await track.setProcessor(createNoiseProcessor());
   };
 
   const detachAudio = (
@@ -200,6 +223,12 @@ export async function connectVoice(
     setKeyboardNoiseSuppression: async (enabled: boolean, inputDeviceId?: string) => {
       keyboardNoiseSuppression = enabled;
       currentInputDeviceId = inputDeviceId ?? currentInputDeviceId;
+      if (!enabled) {
+        const processor = getLocalMicrophoneTrack()?.getProcessor();
+        if (isKeyboardNoiseProcessor(processor)) {
+          await getLocalMicrophoneTrack()?.stopProcessor();
+        }
+      }
       await room.localParticipant.setMicrophoneEnabled(
         !currentMuted,
         getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression, false),
@@ -216,6 +245,12 @@ export async function connectVoice(
           await getLocalMicrophoneTrack()?.stopProcessor();
         }
         await applyKeyboardNoiseSuppression();
+      }
+    },
+    setKeyboardNoiseThreshold: async (threshold: number) => {
+      keyboardNoiseThreshold = Math.max(0, Math.min(100, threshold));
+      if (!currentMuted) {
+        await rebuildKeyboardNoiseProcessor();
       }
     },
     getPublishedMicrophoneTrack: () => getLocalMicrophoneTrack()?.mediaStreamTrack,

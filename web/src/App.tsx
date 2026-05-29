@@ -13,6 +13,7 @@ import {
   Radio,
   RefreshCw,
   Settings,
+  SlidersHorizontal,
   Trash2,
   Users,
   Volume2,
@@ -100,6 +101,8 @@ const text = {
   localVolume: '\u672c\u5730\u63a5\u6536\u97f3\u91cf',
   keyboardNoiseSuppression: '\u952e\u76d8\u58f0\u6d88\u9664',
   keyboardNoiseSuppressionNote: '\u4f7f\u7528 WebRTC \u964d\u566a\u548c\u672c\u5730\u97f3\u9891\u5904\u7406\uff0c\u5c3d\u91cf\u538b\u4f4e\u6572\u952e\u58f0\u3002',
+  keyboardNoiseThreshold: '\u952e\u76d8\u58f0\u95e8\u9650',
+  keyboardNoiseThresholdNote: '\u4f4e\u95e8\u9650\u66f4\u79ef\u6781\uff0c\u9ad8\u95e8\u9650\u66f4\u4fdd\u5b88\u3002',
   aiNoiseSuppression: 'AI \u964d\u566a',
   aiNoiseSuppressionNote: '\u53e0\u52a0 RNNoise \u8f7b\u91cf AI \u6a21\u578b\uff0c\u5bf9\u952e\u76d8\u548c\u80cc\u666f\u566a\u58f0\u66f4\u5f3a\uff0c\u4f46\u53ef\u80fd\u8ba9\u4eba\u58f0\u66f4\u50cf\u901a\u8bdd\u97f3\u8d28\u3002',
 };
@@ -276,6 +279,10 @@ function sliderToVolume(value: number) {
   return 1 + ((value - 100) / 100) * 4;
 }
 
+function clampKeyboardNoiseThreshold(value: number) {
+  return Math.max(0, Math.min(100, Number.isFinite(value) ? Math.round(value) : 50));
+}
+
 function formatVolume(volume: number) {
   return `${Math.round(volume * 100)}%`;
 }
@@ -304,6 +311,9 @@ export function App() {
   );
   const [aiNoiseSuppression, setAiNoiseSuppression] = useState(
     () => localStorage.getItem('mipavoice.aiNoiseSuppression') !== 'false',
+  );
+  const [keyboardNoiseThreshold, setKeyboardNoiseThreshold] = useState(() =>
+    clampKeyboardNoiseThreshold(Number(localStorage.getItem('mipavoice.keyboardNoiseThreshold') ?? 50)),
   );
   const [serverUrl, setServerUrl] = useState(() => localStorage.getItem('mipavoice.serverUrl') ?? '');
   const [serverDraft, setServerDraft] = useState(() => localStorage.getItem('mipavoice.serverUrl') ?? '');
@@ -586,6 +596,7 @@ export function App() {
         outputDeviceId,
         keyboardNoiseSuppression,
         aiNoiseSuppression,
+        keyboardNoiseThreshold,
       });
       voiceRef.current = voice;
       setActive({ channel, sessionId: joined.session_id });
@@ -667,6 +678,13 @@ export function App() {
     setAiNoiseSuppression(enabled);
     localStorage.setItem('mipavoice.aiNoiseSuppression', String(enabled));
     await voiceRef.current?.setAiNoiseSuppression(enabled).catch((err) => setError(err.message));
+  };
+
+  const changeKeyboardNoiseThreshold = async (value: number) => {
+    const next = clampKeyboardNoiseThreshold(value);
+    setKeyboardNoiseThreshold(next);
+    localStorage.setItem('mipavoice.keyboardNoiseThreshold', String(next));
+    await voiceRef.current?.setKeyboardNoiseThreshold(next).catch((err) => setError(err.message));
   };
 
   const setRemoteVolume = (identity: string, volume: number) => {
@@ -1046,6 +1064,25 @@ export function App() {
               <strong>{text.aiNoiseSuppression}</strong>
               <small>{text.aiNoiseSuppressionNote}</small>
             </span>
+          </label>
+          <label className={`settings-slider ${!keyboardNoiseSuppression ? 'disabled' : ''}`}>
+            <span className="settings-toggle__icon">
+              <SlidersHorizontal size={18} />
+            </span>
+            <span>
+              <strong>{text.keyboardNoiseThreshold}</strong>
+              <small>{text.keyboardNoiseThresholdNote}</small>
+            </span>
+            <output>{keyboardNoiseThreshold}</output>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              value={keyboardNoiseThreshold}
+              disabled={!keyboardNoiseSuppression}
+              onChange={(event) => void changeKeyboardNoiseThreshold(Number(event.target.value))}
+            />
           </label>
           <p className="settings-note">{text.deviceNote}</p>
         </Dialog>
