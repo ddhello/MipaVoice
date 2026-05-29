@@ -5,7 +5,6 @@ type AudioNodeChain = {
   source: MediaStreamAudioSourceNode;
   highPass: BiquadFilterNode;
   lowPass: BiquadFilterNode;
-  compressor: DynamicsCompressorNode;
   rnnoise?: AudioWorkletNode;
   gate: ScriptProcessorNode;
   destination: MediaStreamAudioDestinationNode;
@@ -58,7 +57,6 @@ export function createKeyboardNoiseProcessor(useRnnoise = true, keyboardNoiseThr
       chain.source.disconnect();
       chain.highPass.disconnect();
       chain.lowPass.disconnect();
-      chain.compressor.disconnect();
       chain.rnnoise?.disconnect();
       chain.gate.disconnect();
       chain.destination.disconnect();
@@ -89,13 +87,6 @@ export function createKeyboardNoiseProcessor(useRnnoise = true, keyboardNoiseThr
     lowPass.type = 'lowpass';
     lowPass.frequency.value = 4200;
     lowPass.Q.value = 0.65;
-
-    const compressor = context.createDynamicsCompressor();
-    compressor.threshold.value = -34;
-    compressor.knee.value = 16;
-    compressor.ratio.value = 8;
-    compressor.attack.value = 0.004;
-    compressor.release.value = 0.18;
 
     let rnnoise: AudioWorkletNode | undefined;
     if (useRnnoise) {
@@ -169,16 +160,15 @@ export function createKeyboardNoiseProcessor(useRnnoise = true, keyboardNoiseThr
 
     source.connect(highPass);
     highPass.connect(lowPass);
-    lowPass.connect(compressor);
     if (rnnoise) {
-      compressor.connect(rnnoise);
+      lowPass.connect(rnnoise);
       rnnoise.connect(gate);
     } else {
-      compressor.connect(gate);
+      lowPass.connect(gate);
     }
     gate.connect(destination);
 
-    chain = { source, highPass, lowPass, compressor, rnnoise, gate, destination };
+    chain = { source, highPass, lowPass, rnnoise, gate, destination };
     processedTrack = destination.stream.getAudioTracks()[0];
     if (processedTrack) {
       processedTrack.contentHint = 'speech';

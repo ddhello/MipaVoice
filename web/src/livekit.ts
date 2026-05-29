@@ -30,7 +30,7 @@ export function getAudioCaptureOptions(
 ): AudioCaptureOptions {
   return {
     deviceId: inputDeviceId ? { exact: inputDeviceId } : { ideal: 'default' },
-    autoGainControl: keyboardNoiseSuppression,
+    autoGainControl: false,
     channelCount: { ideal: 1 },
     echoCancellation: keyboardNoiseSuppression,
     latency: { ideal: 0.02 },
@@ -44,8 +44,8 @@ export function getAudioCaptureOptions(
         : undefined,
     ...({
       googAudioMirroring: false,
-      googAutoGainControl: keyboardNoiseSuppression,
-      googAutoGainControl2: keyboardNoiseSuppression,
+      googAutoGainControl: false,
+      googAutoGainControl2: false,
       googEchoCancellation: keyboardNoiseSuppression,
       googEchoCancellation2: keyboardNoiseSuppression,
       googHighpassFilter: keyboardNoiseSuppression,
