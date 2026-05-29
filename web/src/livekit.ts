@@ -63,7 +63,7 @@ export async function connectVoice(
     adaptiveStream: true,
     dynacast: true,
     webAudioMix: true,
-    audioCaptureDefaults: getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression),
+    audioCaptureDefaults: getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression, false),
   });
 
   const audioRoot = document.getElementById('audio-root');
@@ -138,7 +138,7 @@ export async function connectVoice(
   }
   await room.localParticipant.setMicrophoneEnabled(
     true,
-    getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression),
+    getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression, false),
   );
   await applyKeyboardNoiseSuppression();
 
@@ -155,7 +155,7 @@ export async function connectVoice(
       currentMuted = muted;
       await room.localParticipant.setMicrophoneEnabled(
         !muted,
-        getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression),
+        getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression, false),
       );
       if (!muted) {
         await applyKeyboardNoiseSuppression();
@@ -176,7 +176,7 @@ export async function connectVoice(
       await room.switchActiveDevice('audioinput', deviceId || 'default');
       await room.localParticipant.setMicrophoneEnabled(
         !currentMuted,
-        getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression),
+        getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression, false),
       );
       if (!currentMuted) {
         await applyKeyboardNoiseSuppression();
@@ -190,7 +190,7 @@ export async function connectVoice(
       currentInputDeviceId = inputDeviceId ?? currentInputDeviceId;
       await room.localParticipant.setMicrophoneEnabled(
         !currentMuted,
-        getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression),
+        getAudioCaptureOptions(currentInputDeviceId, keyboardNoiseSuppression, false),
       );
       if (!currentMuted) {
         await applyKeyboardNoiseSuppression();
