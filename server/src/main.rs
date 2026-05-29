@@ -345,6 +345,11 @@ async fn build_state() -> anyhow::Result<AppState> {
     let sfu_udp_socket = tokio::net::UdpSocket::bind(("0.0.0.0", sfu.udp_port)).await?;
     let sfu_udp_mux =
         ice::udp_mux::UDPMuxDefault::new(ice::udp_mux::UDPMuxParams::new(sfu_udp_socket));
+    tracing::info!(
+        public_ip = ?sfu.public_ip,
+        udp_port = sfu.udp_port,
+        "SFU ICE configured with ice_lite=true network=udp4"
+    );
 
     let (events, _) = broadcast::channel(64);
 
