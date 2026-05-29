@@ -2542,7 +2542,7 @@ dependencies = [
 
 [[package]]
 name = "mipavoice"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "tauri",
  "tauri-build",
@@ -2551,7 +2551,7 @@ dependencies = [
 
 [[package]]
 name = "mipavoice-server"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "argon2",

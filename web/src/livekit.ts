@@ -20,6 +20,7 @@ export async function connectVoice(
   const room = new Room({
     adaptiveStream: true,
     dynacast: true,
+    webAudioMix: true,
   });
 
   const audioRoot = document.getElementById('audio-root');
@@ -90,11 +91,12 @@ export async function connectVoice(
       await room.localParticipant.setMicrophoneEnabled(!muted);
     },
     setParticipantVolume: (identity: string, volume: number) => {
-      const nextVolume = Math.max(0, Math.min(1, volume));
+      const nextVolume = Math.max(0, Math.min(5, volume));
       participantVolumes.set(identity, nextVolume);
+      room.remoteParticipants.get(identity)?.setVolume(nextVolume);
       for (const element of attached.values()) {
         if (element.dataset.participantIdentity === identity) {
-          element.volume = nextVolume;
+          element.volume = Math.min(1, nextVolume);
         }
       }
     },

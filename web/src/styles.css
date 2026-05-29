@@ -394,7 +394,7 @@ h3 {
 
 .member-list {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-auto-rows: max-content;
   align-content: start;
   gap: 10px;
   max-width: 760px;
@@ -409,6 +409,7 @@ h3 {
 }
 
 .member-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -419,10 +420,42 @@ h3 {
   background: #fbfcfa;
 }
 
+.member-profile {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  gap: 10px;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+}
+
+.member-profile:not(:disabled) {
+  cursor: pointer;
+}
+
+.member-profile:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.member-profile:not(:disabled):hover .member-name {
+  color: #28715d;
+}
+
+.member-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
 .member-body {
   display: grid;
   min-width: 0;
-  flex: 1;
+  flex: 0 0 auto;
   gap: 7px;
 }
 
@@ -450,12 +483,27 @@ h3 {
 }
 
 .member-volume {
+  position: absolute;
+  z-index: 4;
+  top: calc(100% - 4px);
+  left: 54px;
+  right: 12px;
   display: grid;
-  grid-template-columns: auto minmax(90px, 1fr);
+  grid-template-columns: auto minmax(140px, 1fr) 48px;
   align-items: center;
   gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #cad8cf;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 14px 28px rgba(25, 34, 30, 0.16);
   color: #63716b;
   font-size: 12px;
+}
+
+.member-volume strong {
+  color: #244f44;
+  text-align: right;
 }
 
 .member-volume input[type='range'] {

@@ -260,6 +260,20 @@ function hostFromServerUrl(value: string) {
   }
 }
 
+function volumeToSlider(volume: number) {
+  if (volume <= 1) return Math.round(volume * 100);
+  return Math.round(100 + ((volume - 1) / 4) * 100);
+}
+
+function sliderToVolume(value: number) {
+  if (value <= 100) return value / 100;
+  return 1 + ((value - 100) / 100) * 4;
+}
+
+function formatVolume(volume: number) {
+  return `${Math.round(volume * 100)}%`;
+}
+
 export function App() {
   const [username, setUsername] = useState(() => localStorage.getItem('mipavoice.username') ?? '');
   const [draftName, setDraftName] = useState(username);
@@ -287,6 +301,7 @@ export function App() {
   const [ownerTokens, setOwnerTokens] = useState(ownerTokensFromStorage);
   const [serverInfo, setServerInfo] = useState<ServerInfo>({ flag: '\uD83C\uDF10', label: '\u672c\u5730\u6216\u672a\u77e5\u670d\u52a1\u5668', latency: null });
   const [participantVolumes, setParticipantVolumes] = useState<Record<string, number>>({});
+  const [volumePanelFor, setVolumePanelFor] = useState<string | null>(null);
   const [activeSpeakers, setActiveSpeakers] = useState<string[]>([]);
   const voiceRef = useRef<VoiceConnection | null>(null);
   const joinLockRef = useRef(false);
@@ -297,6 +312,10 @@ export function App() {
   useEffect(() => {
     setApiBaseUrl(serverUrl);
   }, [serverUrl]);
+
+  useEffect(() => {
+    setVolumePanelFor(null);
+  }, [active?.channel.id]);
 
   const loadChannels = useCallback(async () => {
     setError(null);
@@ -633,7 +652,7 @@ export function App() {
   };
 
   const setRemoteVolume = (identity: string, volume: number) => {
-    const nextVolume = Math.max(0, Math.min(1, volume));
+    const nextVolume = Math.max(0, Math.min(5, volume));
     setParticipantVolumes((current) => ({ ...current, [identity]: nextVolume }));
     voiceRef.current?.setParticipantVolume(identity, nextVolume);
   };
@@ -808,36 +827,51 @@ export function App() {
               <Users size={18} />
               {text.members}
             </div>
-            {activeMembers.map((member) => (
-              <div className="member-row" key={member.session_id}>
-                <span className={`avatar ${activeSpeakers.includes(member.username) ? 'speaking' : ''}`}>
-                  {member.username.slice(0, 1).toUpperCase()}
-                </span>
-                <div className="member-body">
-                  <div className="member-line">
-                    <span>{member.username}</span>
-                    {member.session_id === active?.sessionId && <span className="you-badge">{text.you}</span>}
+            {activeMembers.map((member) => {
+              const isSelf = member.session_id === active?.sessionId;
+              const memberVolume = participantVolumes[member.username] ?? 1;
+              const volumePanelOpen = volumePanelFor === member.session_id;
+
+              return (
+                <div className="member-row" key={member.session_id}>
+                  <button
+                    className="member-profile"
+                    type="button"
+                    disabled={isSelf}
+                    onClick={() => setVolumePanelFor(volumePanelOpen ? null : member.session_id)}
+                    title={isSelf ? undefined : text.localVolume}
+                  >
+                    <span className={`avatar ${activeSpeakers.includes(member.username) ? 'speaking' : ''}`}>
+                      {member.username.slice(0, 1).toUpperCase()}
+                    </span>
+                    <span className="member-name">{member.username}</span>
+                  </button>
+                  <div className="member-body">
+                    <div className="member-line">
+                      {isSelf && <span className="you-badge">{text.you}</span>}
+                    </div>
+                    {!isSelf && volumePanelOpen && (
+                      <label className="member-volume">
+                        <span>{text.localVolume}</span>
+                        <input
+                          type="range"
+                          min="0"
+                          max="200"
+                          value={volumeToSlider(memberVolume)}
+                          onChange={(event) => setRemoteVolume(member.username, sliderToVolume(Number(event.target.value)))}
+                        />
+                        <strong>{formatVolume(memberVolume)}</strong>
+                      </label>
+                    )}
                   </div>
-                  {member.session_id !== active?.sessionId && (
-                    <label className="member-volume">
-                      <span>{text.localVolume}</span>
-                      <input
-                        type="range"
-                        min="0"
-                        max="100"
-                        value={Math.round((participantVolumes[member.username] ?? 1) * 100)}
-                        onChange={(event) => setRemoteVolume(member.username, Number(event.target.value) / 100)}
-                      />
-                    </label>
+                  {active && ownerTokens[active.channel.id] && !isSelf && (
+                    <button className="member-kick" title={text.kick} onClick={() => void kickMember(member)}>
+                      <X size={15} />
+                    </button>
                   )}
                 </div>
-                {active && ownerTokens[active.channel.id] && member.session_id !== active.sessionId && (
-                  <button className="member-kick" title={text.kick} onClick={() => void kickMember(member)}>
-                    <X size={15} />
-                  </button>
-                )}
-              </div>
-            ))}
+              );
+            })}
             {activeMembers.length === 0 && (
               <div className="empty-state large">
                 <Volume2 size={28} />
