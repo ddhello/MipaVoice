@@ -30,7 +30,7 @@ export type JoinResponse = {
   channel_id: string;
   session_id: string;
   username: string;
-  livekit_url: string;
+  sfu_url: string;
   token: string;
 };
 

@@ -1,5 +1,15 @@
-import { Track } from 'livekit-client';
-import type { AudioProcessorOptions, TrackProcessor } from 'livekit-client';
+export type AudioProcessorOptions = {
+  audioContext?: AudioContext;
+  track: MediaStreamTrack;
+};
+
+export type TrackProcessor = {
+  readonly name: string;
+  readonly processedTrack?: MediaStreamTrack;
+  init: (options: AudioProcessorOptions) => Promise<void>;
+  restart: (options: AudioProcessorOptions) => Promise<void>;
+  destroy: () => Promise<void>;
+};
 
 type AudioNodeChain = {
   source: MediaStreamAudioSourceNode;
@@ -14,7 +24,7 @@ const PROCESSOR_NAME = 'mipavoice-keyboard-noise-suppression';
 const rnnoiseWorkletUrl = new URL('./rnnoiseWorklet.js', import.meta.url);
 const rnnoiseModulePromises = new WeakMap<AudioContext, Promise<void>>();
 
-export type KeyboardNoiseProcessor = TrackProcessor<Track.Kind.Audio, AudioProcessorOptions> & {
+export type KeyboardNoiseProcessor = TrackProcessor & {
   readonly rnnoiseActive: boolean;
   readonly rnnoiseError?: string;
 };
@@ -193,7 +203,7 @@ export function createKeyboardNoiseProcessor(useRnnoise = true, keyboardNoiseThr
 }
 
 export function isKeyboardNoiseProcessor(
-  processor?: TrackProcessor<Track.Kind.Audio, AudioProcessorOptions>,
+  processor?: TrackProcessor,
 ): processor is KeyboardNoiseProcessor {
   return processor?.name === PROCESSOR_NAME;
 }

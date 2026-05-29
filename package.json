@@ -6,8 +6,6 @@
     "dev": "pnpm --filter @mipavoice/web dev",
     "build": "pnpm --filter @mipavoice/web build",
     "tauri": "tauri",
-    "livekit:download": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/download-livekit.ps1",
-    "livekit:start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-livekit.ps1",
     "server:dev": "cargo run -p mipavoice-server",
     "server:test": "cargo test -p mipavoice-server"
   },

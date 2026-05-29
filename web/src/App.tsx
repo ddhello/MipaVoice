@@ -30,7 +30,7 @@ import {
   setApiBaseUrl,
   SnapshotEvent,
 } from './api';
-import { connectVoice, VoiceConnection } from './livekit';
+import { connectVoice, VoiceConnection } from './sfu';
 
 type ActiveVoice = {
   channel: Channel;
@@ -618,7 +618,7 @@ export function App() {
     try {
       await leaveCurrent(false);
       const joined = await api.joinChannel(channel.id, username, password);
-      const voice = await connectVoice(joined.livekit_url, joined.token, setVoiceStatus, setActiveSpeakers, {
+      const voice = await connectVoice(joined.sfu_url, joined.token, setVoiceStatus, setActiveSpeakers, {
         inputDeviceId,
         outputDeviceId,
         keyboardNoiseSuppression,

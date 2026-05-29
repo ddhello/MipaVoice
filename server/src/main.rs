@@ -1,6 +1,8 @@
 use std::{
     collections::HashMap,
+    future::Future,
     net::SocketAddr,
+    pin::Pin,
     str::FromStr,
     sync::Arc,
     time::{Duration, Instant},
@@ -21,28 +23,91 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use livekit_api::access_token::{AccessToken, VideoGrants};
+use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use password_hash::rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use sqlx::{sqlite::SqliteConnectOptions, sqlite::SqlitePoolOptions, FromRow, SqlitePool};
 use thiserror::Error;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{broadcast, mpsc, Mutex};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use uuid::Uuid;
+use webrtc::{
+    api::{media_engine::MediaEngine, APIBuilder},
+    ice_transport::ice_candidate::{RTCIceCandidate, RTCIceCandidateInit},
+    peer_connection::{
+        configuration::RTCConfiguration, sdp::session_description::RTCSessionDescription,
+        RTCPeerConnection,
+    },
+    rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTPCodecType},
+    track::{
+        track_local::{track_local_static_rtp::TrackLocalStaticRTP, TrackLocal, TrackLocalWriter},
+        track_remote::TrackRemote,
+    },
+};
 
 #[derive(Clone)]
 struct AppState {
     db: SqlitePool,
-    livekit: LiveKitConfig,
+    sfu: SfuConfig,
+    sfu_rooms: Arc<SfuRooms>,
     presence: Arc<Mutex<Presence>>,
     events: broadcast::Sender<ServerEvent>,
 }
 
 #[derive(Clone)]
-struct LiveKitConfig {
+struct SfuConfig {
     url: String,
-    api_key: String,
-    api_secret: String,
+    secret: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct SfuClaims {
+    sub: String,
+    name: String,
+    room: String,
+    exp: usize,
+}
+
+#[derive(Default)]
+struct SfuRooms {
+    rooms: Mutex<HashMap<String, HashMap<String, Arc<SfuPeer>>>>,
+}
+
+struct SfuPeer {
+    identity: String,
+    room: String,
+    pc: Arc<RTCPeerConnection>,
+    outbound: mpsc::UnboundedSender<SfuOutboundSignal>,
+    published_track: Mutex<Option<Arc<TrackLocalStaticRTP>>>,
+}
+
+#[derive(Deserialize)]
+struct SfuQuery {
+    token: String,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type")]
+enum SfuInboundSignal {
+    #[serde(rename = "offer")]
+    Offer { sdp: String },
+    #[serde(rename = "answer")]
+    Answer { sdp: String },
+    #[serde(rename = "candidate")]
+    Candidate { candidate: RTCIceCandidateInit },
+}
+
+#[derive(Clone, Serialize)]
+#[serde(tag = "type")]
+enum SfuOutboundSignal {
+    #[serde(rename = "answer")]
+    Answer { sdp: String },
+    #[serde(rename = "offer")]
+    Offer { sdp: String },
+    #[serde(rename = "candidate")]
+    Candidate { candidate: RTCIceCandidateInit },
+    #[serde(rename = "participant-left")]
+    ParticipantLeft { identity: String },
 }
 
 #[derive(Default)]
@@ -114,7 +179,7 @@ struct JoinChannelResponse {
     channel_id: Uuid,
     session_id: Uuid,
     username: String,
-    livekit_url: String,
+    sfu_url: String,
     token: String,
 }
 
@@ -238,17 +303,17 @@ async fn build_state() -> anyhow::Result<AppState> {
         .await?;
     migrate(&db).await?;
 
-    let livekit = LiveKitConfig {
-        url: std::env::var("LIVEKIT_URL").unwrap_or_else(|_| "ws://127.0.0.1:7880".into()),
-        api_key: std::env::var("LIVEKIT_API_KEY").unwrap_or_else(|_| "devkey".into()),
-        api_secret: std::env::var("LIVEKIT_API_SECRET").unwrap_or_else(|_| "secret".into()),
+    let sfu = SfuConfig {
+        url: std::env::var("MIPAVOICE_SFU_URL").unwrap_or_else(|_| "/sfu".into()),
+        secret: std::env::var("MIPAVOICE_SFU_SECRET").unwrap_or_else(|_| "dev-secret-change-me".into()),
     };
 
     let (events, _) = broadcast::channel(64);
 
     Ok(AppState {
         db,
-        livekit,
+        sfu,
+        sfu_rooms: Arc::new(SfuRooms::default()),
         presence: Arc::new(Mutex::new(Presence::default())),
         events,
     })
@@ -258,6 +323,7 @@ fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/ws", get(ws_handler))
+        .route("/sfu", get(sfu_handler))
         .route("/api/channels", get(list_channels).post(create_channel))
         .route("/api/channels/{channel_id}", delete(delete_channel))
         .route("/api/channels/{channel_id}/join", post(join_channel))
@@ -507,7 +573,7 @@ async fn join_channel(
     validate_channel_password(&channel, payload.password.as_deref())?;
 
     let session_id = Uuid::new_v4();
-    let token = livekit_token(&state.livekit, &channel, username)?;
+    let token = sfu_token(&state.sfu, &channel, username)?;
 
     {
         let mut presence = state.presence.lock().await;
@@ -529,7 +595,7 @@ async fn join_channel(
         channel_id,
         session_id,
         username: username.to_string(),
-        livekit_url: state.livekit.url.clone(),
+        sfu_url: state.sfu.url.clone(),
         token,
     }))
 }
@@ -618,6 +684,262 @@ async fn websocket(mut socket: WebSocket, state: AppState, session_id: Option<Uu
 
     if let Some(id) = session_id {
         remove_session(&state, id).await;
+    }
+}
+
+async fn sfu_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    Query(query): Query<SfuQuery>,
+) -> impl IntoResponse {
+    match validate_sfu_token(&state.sfu, &query.token) {
+        Ok(claims) => ws.on_upgrade(move |socket| sfu_socket(socket, state, claims)),
+        Err(err) => err.into_response(),
+    }
+}
+
+async fn sfu_socket(mut socket: WebSocket, state: AppState, claims: SfuClaims) {
+    let (outbound, mut outbound_rx) = mpsc::unbounded_channel();
+    let peer = match create_sfu_peer(&claims, outbound).await {
+        Ok(peer) => peer,
+        Err(err) => {
+            tracing::warn!("failed to create SFU peer: {err}");
+            return;
+        }
+    };
+
+    if let Err(err) = state.sfu_rooms.join(peer.clone()).await {
+        tracing::warn!("failed to join SFU room: {err}");
+        let _ = peer.pc.close().await;
+        return;
+    }
+
+    loop {
+        tokio::select! {
+            outbound = outbound_rx.recv() => {
+                let Some(outbound) = outbound else {
+                    break;
+                };
+                match serde_json::to_string(&outbound) {
+                    Ok(text) => {
+                        if socket.send(Message::Text(text.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(err) => tracing::warn!("failed to encode SFU signal: {err}"),
+                }
+            }
+            inbound = socket.recv() => {
+                match inbound {
+                    Some(Ok(Message::Text(text))) => {
+                        if let Err(err) = handle_sfu_signal(&state.sfu_rooms, &peer, &text).await {
+                            tracing::warn!("failed to handle SFU signal: {err}");
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Err(err)) => {
+                        tracing::warn!("SFU websocket error: {err}");
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    state.sfu_rooms.leave(&peer).await;
+    let _ = peer.pc.close().await;
+}
+
+async fn create_sfu_peer(
+    claims: &SfuClaims,
+    outbound: mpsc::UnboundedSender<SfuOutboundSignal>,
+) -> anyhow::Result<Arc<SfuPeer>> {
+    let mut media_engine = MediaEngine::default();
+    media_engine.register_default_codecs()?;
+    let api = APIBuilder::new().with_media_engine(media_engine).build();
+    let pc = Arc::new(api.new_peer_connection(RTCConfiguration::default()).await?);
+
+    let candidate_outbound = outbound.clone();
+    pc.on_ice_candidate(Box::new(move |candidate: Option<RTCIceCandidate>| {
+        let candidate_outbound = candidate_outbound.clone();
+        Box::pin(async move {
+            let Some(candidate) = candidate else {
+                return;
+            };
+            match candidate.to_json() {
+                Ok(candidate) => {
+                    let _ = candidate_outbound.send(SfuOutboundSignal::Candidate { candidate });
+                }
+                Err(err) => tracing::warn!("failed to encode ICE candidate: {err}"),
+            }
+        })
+    }));
+
+    Ok(Arc::new(SfuPeer {
+        identity: claims.name.clone(),
+        room: claims.room.clone(),
+        pc,
+        outbound,
+        published_track: Mutex::new(None),
+    }))
+}
+
+async fn handle_sfu_signal(
+    rooms: &Arc<SfuRooms>,
+    peer: &Arc<SfuPeer>,
+    text: &str,
+) -> anyhow::Result<()> {
+    match serde_json::from_str::<SfuInboundSignal>(text)? {
+        SfuInboundSignal::Offer { sdp } => {
+            let rooms = rooms.clone();
+            let peer_for_track = peer.clone();
+            peer.pc.on_track(Box::new(move |track, _, _| {
+                let rooms = rooms.clone();
+                let peer = peer_for_track.clone();
+                Box::pin(async move {
+                    rooms.publish_track(peer, track).await;
+                }) as Pin<Box<dyn Future<Output = ()> + Send>>
+            }));
+
+            let offer = RTCSessionDescription::offer(sdp)?;
+            peer.pc.set_remote_description(offer).await?;
+            let answer = peer.pc.create_answer(None).await?;
+            let mut gather_complete = peer.pc.gathering_complete_promise().await;
+            peer.pc.set_local_description(answer).await?;
+            let _ = gather_complete.recv().await;
+            if let Some(answer) = peer.pc.local_description().await {
+                let _ = peer
+                    .outbound
+                    .send(SfuOutboundSignal::Answer { sdp: answer.sdp });
+            }
+        }
+        SfuInboundSignal::Answer { sdp } => {
+            let answer = RTCSessionDescription::answer(sdp)?;
+            peer.pc.set_remote_description(answer).await?;
+        }
+        SfuInboundSignal::Candidate { candidate } => {
+            peer.pc.add_ice_candidate(candidate).await?;
+        }
+    }
+
+    Ok(())
+}
+
+impl SfuRooms {
+    async fn join(&self, peer: Arc<SfuPeer>) -> anyhow::Result<()> {
+        let existing_tracks = {
+            let mut rooms = self.rooms.lock().await;
+            let room = rooms.entry(peer.room.clone()).or_default();
+            let tracks = room
+                .values()
+                .filter(|existing| existing.identity != peer.identity)
+                .filter_map(|existing| existing.published_track.try_lock().ok()?.clone())
+                .collect::<Vec<_>>();
+            room.insert(peer.identity.clone(), peer.clone());
+            tracks
+        };
+
+        for track in existing_tracks {
+            peer.pc
+                .add_track(track as Arc<dyn TrackLocal + Send + Sync>)
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    async fn leave(&self, peer: &Arc<SfuPeer>) {
+        let peers = {
+            let mut rooms = self.rooms.lock().await;
+            let Some(room) = rooms.get_mut(&peer.room) else {
+                return;
+            };
+            room.remove(&peer.identity);
+            let peers = room.values().cloned().collect::<Vec<_>>();
+            if room.is_empty() {
+                rooms.remove(&peer.room);
+            }
+            peers
+        };
+
+        for target in peers {
+            let _ = target.outbound.send(SfuOutboundSignal::ParticipantLeft {
+                identity: peer.identity.clone(),
+            });
+        }
+    }
+
+    async fn publish_track(&self, peer: Arc<SfuPeer>, track: Arc<TrackRemote>) {
+        if track.kind() != RTPCodecType::Audio {
+            return;
+        }
+
+        let local_track = Arc::new(TrackLocalStaticRTP::new(
+            RTCRtpCodecCapability {
+                mime_type: track.codec().capability.mime_type,
+                clock_rate: track.codec().capability.clock_rate,
+                channels: track.codec().capability.channels,
+                sdp_fmtp_line: track.codec().capability.sdp_fmtp_line,
+                rtcp_feedback: track.codec().capability.rtcp_feedback,
+            },
+            peer.identity.clone(),
+            peer.identity.clone(),
+        ));
+
+        {
+            let mut published = peer.published_track.lock().await;
+            *published = Some(local_track.clone());
+        }
+
+        let targets = {
+            let rooms = self.rooms.lock().await;
+            rooms
+                .get(&peer.room)
+                .map(|room| {
+                    room.values()
+                        .filter(|target| target.identity != peer.identity)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+
+        for target in targets {
+            if target
+                .pc
+                .add_track(local_track.clone() as Arc<dyn TrackLocal + Send + Sync>)
+                .await
+                .is_ok()
+            {
+                renegotiate_peer(target).await;
+            }
+        }
+
+        tokio::spawn(async move {
+            while let Ok((packet, _)) = track.read_rtp().await {
+                if let Err(err) = local_track.write_rtp(&packet).await {
+                    tracing::debug!("failed to forward RTP: {err}");
+                }
+            }
+        });
+    }
+}
+
+async fn renegotiate_peer(peer: Arc<SfuPeer>) {
+    match peer.pc.create_offer(None).await {
+        Ok(offer) => {
+            let mut gather_complete = peer.pc.gathering_complete_promise().await;
+            if let Err(err) = peer.pc.set_local_description(offer).await {
+                tracing::warn!("failed to set renegotiation offer: {err}");
+                return;
+            }
+            let _ = gather_complete.recv().await;
+            if let Some(offer) = peer.pc.local_description().await {
+                let _ = peer.outbound.send(SfuOutboundSignal::Offer { sdp: offer.sdp });
+            }
+        }
+        Err(err) => tracing::warn!("failed to create renegotiation offer: {err}"),
     }
 }
 
@@ -752,26 +1074,34 @@ fn validate_channel_password(channel: &ChannelRow, password: Option<&str>) -> Re
     }
 }
 
-fn livekit_token(
-    livekit: &LiveKitConfig,
+fn sfu_token(
+    sfu: &SfuConfig,
     channel: &ChannelRow,
     username: &str,
 ) -> Result<String, ApiError> {
-    let room = channel.id.clone();
-    let grants = VideoGrants {
-        room_join: true,
-        room: room.clone(),
-        can_publish: true,
-        can_subscribe: true,
-        ..Default::default()
+    let claims = SfuClaims {
+        sub: username.to_string(),
+        name: username.to_string(),
+        room: channel.id.clone(),
+        exp: (Utc::now() + chrono::Duration::minutes(15)).timestamp() as usize,
     };
 
-    AccessToken::with_api_key(&livekit.api_key, &livekit.api_secret)
-        .with_identity(username)
-        .with_name(username)
-        .with_grants(grants)
-        .to_jwt()
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(sfu.secret.as_bytes()),
+    )
         .map_err(|err| ApiError::Token(err.to_string()))
+}
+
+fn validate_sfu_token(sfu: &SfuConfig, token: &str) -> Result<SfuClaims, ApiError> {
+    decode::<SfuClaims>(
+        token,
+        &DecodingKey::from_secret(sfu.secret.as_bytes()),
+        &Validation::default(),
+    )
+    .map(|data| data.claims)
+    .map_err(|_| ApiError::Forbidden)
 }
 
 async fn shutdown_signal() {
