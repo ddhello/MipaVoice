@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     future::Future,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     pin::Pin,
     str::FromStr,
     sync::{
@@ -93,11 +93,13 @@ struct SfuRooms {
 }
 
 struct SfuPeer {
+    id: String,
     identity: String,
     room: String,
     pc: Arc<RTCPeerConnection>,
     outbound: mpsc::UnboundedSender<SfuOutboundSignal>,
     published_track: Mutex<Option<Arc<TrackLocalStaticRTP>>>,
+    advertised_ip: Option<String>,
     closed: AtomicBool,
 }
 
@@ -348,7 +350,7 @@ async fn build_state() -> anyhow::Result<AppState> {
     tracing::info!(
         public_ip = ?sfu.public_ip,
         udp_port = sfu.udp_port,
-        "SFU ICE configured with ice_lite=true network=udp4"
+        "SFU ICE configured with ice_lite=false network=udp4"
     );
 
     let (events, _) = broadcast::channel(64);
@@ -844,7 +846,6 @@ async fn create_sfu_peer(
     let mut media_engine = MediaEngine::default();
     media_engine.register_default_codecs()?;
     let mut setting_engine = SettingEngine::default();
-    setting_engine.set_lite(true);
     setting_engine.set_network_types(vec![NetworkType::Udp4]);
     setting_engine.set_udp_network(ice::udp_network::UDPNetwork::Muxed(udp_mux));
     if let Some(public_ip) = &sfu.public_ip {
@@ -877,13 +878,64 @@ async fn create_sfu_peer(
     }));
 
     Ok(Arc::new(SfuPeer {
+        id: Uuid::new_v4().to_string(),
         identity: claims.name.clone(),
         room: claims.room.clone(),
         pc,
         outbound,
         published_track: Mutex::new(None),
+        advertised_ip: sfu.public_ip.clone(),
         closed: AtomicBool::new(false),
     }))
+}
+
+fn should_accept_sfu_candidate(
+    candidate: &RTCIceCandidateInit,
+    advertised_ip: Option<&str>,
+) -> bool {
+    let parts = candidate.candidate.split_whitespace().collect::<Vec<_>>();
+    if parts.len() < 8 {
+        return false;
+    }
+
+    if !parts[2].eq_ignore_ascii_case("udp") {
+        return false;
+    }
+
+    let Ok(address) = parts[4].parse::<IpAddr>() else {
+        return false;
+    };
+    if !address.is_ipv4() {
+        return false;
+    }
+
+    let candidate_type = parts[7].to_ascii_lowercase();
+    if candidate_type == "relay" {
+        return true;
+    }
+
+    if candidate_type == "srflx" {
+        return advertised_ip
+            .and_then(|ip| ip.parse::<IpAddr>().ok())
+            .is_some_and(is_public_ipv4);
+    }
+
+    candidate_type == "host" && advertised_ip.is_none_or(|ip| ip == parts[4])
+}
+
+fn is_public_ipv4(ip: IpAddr) -> bool {
+    let IpAddr::V4(ip) = ip else {
+        return false;
+    };
+    let octets = ip.octets();
+
+    !(ip.is_private()
+        || ip.is_loopback()
+        || ip.is_link_local()
+        || octets[0] == 0
+        || octets[0] >= 224
+        || (octets[0] == 100 && (64..=127).contains(&octets[1]))
+        || (octets[0] == 198 && (18..=19).contains(&octets[1])))
 }
 
 async fn cleanup_sfu_peer(rooms: Arc<SfuRooms>, peer: Arc<SfuPeer>) {
@@ -940,6 +992,16 @@ async fn handle_sfu_signal(
             peer.pc.set_remote_description(answer).await?;
         }
         SfuInboundSignal::Candidate { candidate } => {
+            if !should_accept_sfu_candidate(&candidate, peer.advertised_ip.as_deref()) {
+                tracing::info!(
+                    identity = %peer.identity,
+                    room = %peer.room,
+                    candidate = %candidate.candidate,
+                    "SFU ignored client candidate"
+                );
+                return Ok(());
+            }
+
             tracing::info!(
                 identity = %peer.identity,
                 room = %peer.room,
@@ -969,10 +1031,10 @@ impl SfuRooms {
             let room = rooms.entry(peer.room.clone()).or_default();
             let tracks = room
                 .values()
-                .filter(|existing| existing.identity != peer.identity)
+                .filter(|existing| existing.id != peer.id)
                 .filter_map(|existing| existing.published_track.try_lock().ok()?.clone())
                 .collect::<Vec<_>>();
-            room.insert(peer.identity.clone(), peer.clone());
+            room.insert(peer.id.clone(), peer.clone());
             tracks
         };
 
@@ -991,7 +1053,7 @@ impl SfuRooms {
             let Some(room) = rooms.get_mut(&peer.room) else {
                 return;
             };
-            room.remove(&peer.identity);
+            room.remove(&peer.id);
             let peers = room.values().cloned().collect::<Vec<_>>();
             if room.is_empty() {
                 rooms.remove(&peer.room);
@@ -1001,7 +1063,7 @@ impl SfuRooms {
 
         for target in peers {
             let _ = target.outbound.send(SfuOutboundSignal::ParticipantLeft {
-                identity: peer.identity.clone(),
+                identity: peer.id.clone(),
             });
         }
     }
@@ -1019,7 +1081,7 @@ impl SfuRooms {
                 sdp_fmtp_line: track.codec().capability.sdp_fmtp_line,
                 rtcp_feedback: track.codec().capability.rtcp_feedback,
             },
-            peer.identity.clone(),
+            peer.id.clone(),
             peer.identity.clone(),
         ));
 
@@ -1034,7 +1096,7 @@ impl SfuRooms {
                 .get(&peer.room)
                 .map(|room| {
                     room.values()
-                        .filter(|target| target.identity != peer.identity)
+                        .filter(|target| target.id != peer.id)
                         .cloned()
                         .collect::<Vec<_>>()
                 })
@@ -1239,8 +1301,17 @@ fn validate_sfu_token(sfu: &SfuConfig, token: &str) -> Result<SfuClaims, ApiErro
 }
 
 fn parse_ice_servers() -> Vec<IceServerDto> {
-    let urls = std::env::var("MIPAVOICE_ICE_SERVERS")
-        .unwrap_or_else(|_| "stun:stun.l.google.com:19302".into())
+    let raw_urls = std::env::var("MIPAVOICE_ICE_SERVERS")
+        .unwrap_or_else(|_| "stun:stun.l.google.com:19302".into());
+    let raw_urls = raw_urls.trim();
+    if matches!(
+        raw_urls.to_ascii_lowercase().as_str(),
+        "none" | "off" | "disabled"
+    ) {
+        return Vec::new();
+    }
+
+    let urls = raw_urls
         .split(',')
         .map(str::trim)
         .filter(|value| !value.is_empty())
