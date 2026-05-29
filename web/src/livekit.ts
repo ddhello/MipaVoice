@@ -17,6 +17,7 @@ export type VoiceConnection = {
   switchOutput: (deviceId: string) => Promise<void>;
   setKeyboardNoiseSuppression: (enabled: boolean, inputDeviceId?: string) => Promise<void>;
   setAiNoiseSuppression: (enabled: boolean) => Promise<void>;
+  getPublishedMicrophoneTrack: () => MediaStreamTrack | undefined;
 };
 
 export function getAudioCaptureOptions(
@@ -217,5 +218,6 @@ export async function connectVoice(
         await applyKeyboardNoiseSuppression();
       }
     },
+    getPublishedMicrophoneTrack: () => getLocalMicrophoneTrack()?.mediaStreamTrack,
   };
 }

@@ -15,6 +15,11 @@ const PROCESSOR_NAME = 'mipavoice-keyboard-noise-suppression';
 const rnnoiseWorkletUrl = new URL('./rnnoiseWorklet.js', import.meta.url);
 const rnnoiseModulePromises = new WeakMap<AudioContext, Promise<void>>();
 
+export type KeyboardNoiseProcessor = TrackProcessor<Track.Kind.Audio, AudioProcessorOptions> & {
+  readonly rnnoiseActive: boolean;
+  readonly rnnoiseError?: string;
+};
+
 function loadRnnoiseWorklet(audioContext: AudioContext) {
   if (!audioContext.audioWorklet) {
     return Promise.reject(new Error('AudioWorklet is not supported'));
@@ -28,12 +33,13 @@ function loadRnnoiseWorklet(audioContext: AudioContext) {
   return promise;
 }
 
-export function createKeyboardNoiseProcessor(useRnnoise = true): TrackProcessor<Track.Kind.Audio, AudioProcessorOptions> {
+export function createKeyboardNoiseProcessor(useRnnoise = true): KeyboardNoiseProcessor {
   let chain: AudioNodeChain | null = null;
   let processedTrack: MediaStreamTrack | undefined;
   let gateGain = 0;
   let holdFrames = 0;
   let noiseFloor = 0.008;
+  let rnnoiseError: string | undefined;
 
   const destroy = async () => {
     if (processedTrack) {
@@ -87,9 +93,13 @@ export function createKeyboardNoiseProcessor(useRnnoise = true): TrackProcessor<
           numberOfOutputs: 1,
           outputChannelCount: [1],
         });
-      } catch {
+        rnnoiseError = undefined;
+      } catch (error) {
+        rnnoiseError = error instanceof Error ? error.message : 'RNNoise failed to load';
         rnnoise = undefined;
       }
+    } else {
+      rnnoiseError = undefined;
     }
 
     const gate = audioContext.createScriptProcessor(1024, 1, 1);
@@ -99,12 +109,15 @@ export function createKeyboardNoiseProcessor(useRnnoise = true): TrackProcessor<
       const input = event.inputBuffer.getChannelData(0);
       const output = event.outputBuffer.getChannelData(0);
       let sum = 0;
+      let peak = 0;
       let zeroCrossings = 0;
       let previous = input[0] ?? 0;
 
       for (let index = 0; index < input.length; index += 1) {
         const sample = input[index] ?? 0;
+        const abs = Math.abs(sample);
         sum += sample * sample;
+        peak = Math.max(peak, abs);
         if ((sample >= 0 && previous < 0) || (sample < 0 && previous >= 0)) {
           zeroCrossings += 1;
         }
@@ -113,12 +126,17 @@ export function createKeyboardNoiseProcessor(useRnnoise = true): TrackProcessor<
 
       const rms = Math.sqrt(sum / input.length);
       const zeroCrossingRate = zeroCrossings / input.length;
+      const crestFactor = peak / Math.max(rms, 0.0001);
       if (rms < noiseFloor * 1.8) {
         noiseFloor = noiseFloor * 0.995 + rms * 0.005;
       }
 
       const openThreshold = Math.max(0.018, noiseFloor * 3.2);
-      const likelyKeyboardClick = zeroCrossingRate > 0.22 && rms < 0.075 && holdFrames === 0;
+      const likelyKeyboardClick =
+        holdFrames === 0 &&
+        peak > 0.018 &&
+        rms < 0.18 &&
+        (zeroCrossingRate > 0.2 || crestFactor > 5.5);
       const shouldOpen = rms > openThreshold && !likelyKeyboardClick;
 
       if (shouldOpen) {
@@ -127,8 +145,8 @@ export function createKeyboardNoiseProcessor(useRnnoise = true): TrackProcessor<
         holdFrames -= 1;
       }
 
-      const targetGain = holdFrames > 0 ? 1 : 0.08;
-      const smoothing = targetGain > gateGain ? 0.35 : 0.08;
+      const targetGain = holdFrames > 0 ? 1 : likelyKeyboardClick ? 0.015 : 0.05;
+      const smoothing = targetGain > gateGain ? 0.35 : likelyKeyboardClick ? 0.22 : 0.08;
       gateGain += (targetGain - gateGain) * smoothing;
 
       for (let index = 0; index < input.length; index += 1) {
@@ -159,12 +177,20 @@ export function createKeyboardNoiseProcessor(useRnnoise = true): TrackProcessor<
     get processedTrack() {
       return processedTrack;
     },
+    get rnnoiseActive() {
+      return Boolean(chain?.rnnoise);
+    },
+    get rnnoiseError() {
+      return rnnoiseError;
+    },
     init,
     restart: init,
     destroy,
   };
 }
 
-export function isKeyboardNoiseProcessor(processor?: TrackProcessor<Track.Kind.Audio, AudioProcessorOptions>) {
+export function isKeyboardNoiseProcessor(
+  processor?: TrackProcessor<Track.Kind.Audio, AudioProcessorOptions>,
+): processor is KeyboardNoiseProcessor {
   return processor?.name === PROCESSOR_NAME;
 }

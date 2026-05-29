@@ -29,7 +29,7 @@ import {
   setApiBaseUrl,
   SnapshotEvent,
 } from './api';
-import { connectVoice, getAudioCaptureOptions, VoiceConnection } from './livekit';
+import { connectVoice, VoiceConnection } from './livekit';
 
 type ActiveVoice = {
   channel: Channel;
@@ -476,25 +476,19 @@ export function App() {
   }, [muted]);
 
   useEffect(() => {
-    let disposed = false;
-    let stream: MediaStream | null = null;
     let context: AudioContext | null = null;
     let frame = 0;
 
     const startMeter = async () => {
-      if (!active || muted || !navigator.mediaDevices?.getUserMedia) {
+      const microphoneTrack = voiceRef.current?.getPublishedMicrophoneTrack();
+      if (!active || muted || !microphoneTrack) {
         setAudioLevel(0);
         return;
       }
 
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: getAudioCaptureOptions(inputDeviceId, keyboardNoiseSuppression, false) as MediaTrackConstraints,
-        });
-        if (disposed) return;
-
         context = new AudioContext();
-        const source = context.createMediaStreamSource(stream);
+        const source = context.createMediaStreamSource(new MediaStream([microphoneTrack]));
         const analyser = context.createAnalyser();
         analyser.fftSize = 256;
         source.connect(analyser);
@@ -521,12 +515,10 @@ export function App() {
     startMeter();
 
     return () => {
-      disposed = true;
       if (frame) window.cancelAnimationFrame(frame);
-      stream?.getTracks().forEach((track) => track.stop());
       context?.close().catch(() => undefined);
     };
-  }, [active, inputDeviceId, keyboardNoiseSuppression, muted]);
+  }, [active, inputDeviceId, keyboardNoiseSuppression, aiNoiseSuppression, muted]);
 
   const saveOwnerTokens = (next: Record<string, string>) => {
     setOwnerTokens(next);
