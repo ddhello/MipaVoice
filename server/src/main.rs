@@ -891,7 +891,7 @@ async fn create_sfu_peer(
 
 fn should_accept_sfu_candidate(
     candidate: &RTCIceCandidateInit,
-    advertised_ip: Option<&str>,
+    _advertised_ip: Option<&str>,
 ) -> bool {
     let parts = candidate.candidate.split_whitespace().collect::<Vec<_>>();
     if parts.len() < 8 {
@@ -909,33 +909,10 @@ fn should_accept_sfu_candidate(
         return false;
     }
 
-    let candidate_type = parts[7].to_ascii_lowercase();
-    if candidate_type == "relay" {
-        return true;
-    }
-
-    if candidate_type == "srflx" {
-        return advertised_ip
-            .and_then(|ip| ip.parse::<IpAddr>().ok())
-            .is_some_and(is_public_ipv4);
-    }
-
-    candidate_type == "host" && advertised_ip.is_none_or(|ip| ip == parts[4])
-}
-
-fn is_public_ipv4(ip: IpAddr) -> bool {
-    let IpAddr::V4(ip) = ip else {
-        return false;
-    };
-    let octets = ip.octets();
-
-    !(ip.is_private()
-        || ip.is_loopback()
-        || ip.is_link_local()
-        || octets[0] == 0
-        || octets[0] >= 224
-        || (octets[0] == 100 && (64..=127).contains(&octets[1]))
-        || (octets[0] == 198 && (18..=19).contains(&octets[1])))
+    matches!(
+        parts[7].to_ascii_lowercase().as_str(),
+        "host" | "srflx" | "relay" | "prflx"
+    )
 }
 
 async fn cleanup_sfu_peer(rooms: Arc<SfuRooms>, peer: Arc<SfuPeer>) {
