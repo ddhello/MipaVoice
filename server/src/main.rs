@@ -26,6 +26,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
+use ice::network_type::NetworkType;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use password_hash::rand_core::OsRng;
 use serde::{Deserialize, Serialize};
@@ -825,6 +826,8 @@ async fn create_sfu_peer(
     let mut media_engine = MediaEngine::default();
     media_engine.register_default_codecs()?;
     let mut setting_engine = SettingEngine::default();
+    setting_engine.set_lite(true);
+    setting_engine.set_network_types(vec![NetworkType::Udp4]);
     setting_engine.set_udp_network(ice::udp_network::UDPNetwork::Muxed(udp_mux));
     if let Some(public_ip) = &sfu.public_ip {
         setting_engine.set_nat_1to1_ips(vec![public_ip.clone()], RTCIceCandidateType::Host);
