@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     future::Future,
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     pin::Pin,
     str::FromStr,
     sync::{
@@ -77,6 +77,7 @@ struct IceServerDto {
     urls: Vec<String>,
     username: Option<String>,
     credential: Option<String>,
+    credential_type: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -891,7 +892,7 @@ async fn create_sfu_peer(
 
 fn should_accept_sfu_candidate(
     candidate: &RTCIceCandidateInit,
-    advertised_ip: Option<&str>,
+    _advertised_ip: Option<&str>,
 ) -> bool {
     let parts = candidate.candidate.split_whitespace().collect::<Vec<_>>();
     if parts.len() < 8 {
@@ -902,33 +903,17 @@ fn should_accept_sfu_candidate(
         return false;
     }
 
-    let Ok(address) = parts[4].parse::<IpAddr>() else {
+    let Some(candidate_type) = parts
+        .windows(2)
+        .find_map(|pair| pair[0].eq_ignore_ascii_case("typ").then_some(pair[1]))
+    else {
         return false;
     };
-    if !address.is_ipv4() {
-        return false;
-    }
 
-    match parts[7].to_ascii_lowercase().as_str() {
-        "relay" | "srflx" | "prflx" => true,
-        "host" => advertised_ip.is_none() || is_public_ipv4(address),
+    match candidate_type.to_ascii_lowercase().as_str() {
+        "host" | "relay" | "srflx" | "prflx" => true,
         _ => false,
     }
-}
-
-fn is_public_ipv4(ip: IpAddr) -> bool {
-    let IpAddr::V4(ip) = ip else {
-        return false;
-    };
-    let octets = ip.octets();
-
-    !(ip.is_private()
-        || ip.is_loopback()
-        || ip.is_link_local()
-        || octets[0] == 0
-        || octets[0] >= 224
-        || (octets[0] == 100 && (64..=127).contains(&octets[1]))
-        || (octets[0] == 198 && (18..=19).contains(&octets[1])))
 }
 
 async fn cleanup_sfu_peer(rooms: Arc<SfuRooms>, peer: Arc<SfuPeer>) {
@@ -1328,6 +1313,7 @@ fn parse_ice_servers() -> Vec<IceServerDto> {
         urls,
         username,
         credential,
+        credential_type: Some("password".into()),
     }]
 }
 
@@ -1390,5 +1376,25 @@ mod tests {
         };
 
         assert!(validate_channel_password(&channel, None).is_ok());
+    }
+
+    #[test]
+    fn sfu_candidate_filter_reads_type_after_typ_marker() {
+        let srflx = RTCIceCandidateInit {
+            candidate: "candidate:1 1 udp 2122260223 203.0.113.10 54321 typ srflx raddr 10.0.0.2 rport 54321".into(),
+            ..Default::default()
+        };
+        let mdns_host = RTCIceCandidateInit {
+            candidate: "candidate:2 1 udp 2122260223 7f3a9b7e-8c88-4c4d.local 54321 typ host".into(),
+            ..Default::default()
+        };
+        let tcp_host = RTCIceCandidateInit {
+            candidate: "candidate:3 1 tcp 1518280447 192.168.1.42 9 typ host tcptype active".into(),
+            ..Default::default()
+        };
+
+        assert!(should_accept_sfu_candidate(&srflx, Some("198.51.100.8")));
+        assert!(should_accept_sfu_candidate(&mdns_host, Some("198.51.100.8")));
+        assert!(!should_accept_sfu_candidate(&tcp_host, None));
     }
 }
