@@ -1,5 +1,6 @@
 node_modules/
 target/
+target-codex*/
 dist/
 web/dist/
 .bin/

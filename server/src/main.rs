@@ -26,7 +26,10 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use ice::network_type::NetworkType;
+use ice::{
+    network_type::NetworkType,
+    udp_network::{EphemeralUDP, UDPNetwork},
+};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use password_hash::rand_core::OsRng;
 use serde::{Deserialize, Serialize};
@@ -58,7 +61,6 @@ use webrtc::{
 struct AppState {
     db: SqlitePool,
     sfu: SfuConfig,
-    sfu_udp_mux: Arc<dyn ice::udp_mux::UDPMux + Send + Sync>,
     sfu_rooms: Arc<SfuRooms>,
     presence: Arc<Mutex<Presence>>,
     events: broadcast::Sender<ServerEvent>,
@@ -70,6 +72,7 @@ struct SfuConfig {
     secret: String,
     public_ip: Option<String>,
     udp_port: u16,
+    udp_port_max: u16,
     ice_servers: Vec<IceServerDto>,
 }
 
@@ -345,14 +348,21 @@ async fn build_state() -> anyhow::Result<AppState> {
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(50000),
+        udp_port_max: 0,
         ice_servers: parse_ice_servers(),
     };
-    let sfu_udp_socket = tokio::net::UdpSocket::bind(("0.0.0.0", sfu.udp_port)).await?;
-    let sfu_udp_mux =
-        ice::udp_mux::UDPMuxDefault::new(ice::udp_mux::UDPMuxParams::new(sfu_udp_socket));
+    let sfu = SfuConfig {
+        udp_port_max: std::env::var("MIPAVOICE_SFU_UDP_PORT_MAX")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .filter(|value| *value >= sfu.udp_port)
+            .unwrap_or_else(|| sfu.udp_port.saturating_add(100)),
+        ..sfu
+    };
     tracing::info!(
         public_ip = ?sfu.public_ip,
-        udp_port = sfu.udp_port,
+        udp_port_min = sfu.udp_port,
+        udp_port_max = sfu.udp_port_max,
         "SFU ICE configured with ice_lite=false network=udp4"
     );
 
@@ -361,7 +371,6 @@ async fn build_state() -> anyhow::Result<AppState> {
     Ok(AppState {
         db,
         sfu,
-        sfu_udp_mux,
         sfu_rooms: Arc::new(SfuRooms::default()),
         presence: Arc::new(Mutex::new(Presence::default())),
         events,
@@ -763,8 +772,7 @@ async fn sfu_handler(
 
 async fn sfu_socket(mut socket: WebSocket, state: AppState, claims: SfuClaims) {
     let (outbound, mut outbound_rx) = mpsc::unbounded_channel();
-    let peer = match create_sfu_peer(&state.sfu, state.sfu_udp_mux.clone(), &claims, outbound).await
-    {
+    let peer = match create_sfu_peer(&state.sfu, &claims, outbound).await {
         Ok(peer) => peer,
         Err(err) => {
             tracing::warn!("failed to create SFU peer: {err}");
@@ -842,7 +850,6 @@ async fn sfu_socket(mut socket: WebSocket, state: AppState, claims: SfuClaims) {
 
 async fn create_sfu_peer(
     sfu: &SfuConfig,
-    udp_mux: Arc<dyn ice::udp_mux::UDPMux + Send + Sync>,
     claims: &SfuClaims,
     outbound: mpsc::UnboundedSender<SfuOutboundSignal>,
 ) -> anyhow::Result<Arc<SfuPeer>> {
@@ -850,7 +857,10 @@ async fn create_sfu_peer(
     media_engine.register_default_codecs()?;
     let mut setting_engine = SettingEngine::default();
     setting_engine.set_network_types(vec![NetworkType::Udp4]);
-    setting_engine.set_udp_network(ice::udp_network::UDPNetwork::Muxed(udp_mux));
+    setting_engine.set_udp_network(UDPNetwork::Ephemeral(EphemeralUDP::new(
+        sfu.udp_port,
+        sfu.udp_port_max,
+    )?));
     if let Some(public_ip) = &sfu.public_ip {
         setting_engine.set_nat_1to1_ips(vec![public_ip.clone()], RTCIceCandidateType::Host);
     }

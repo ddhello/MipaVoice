@@ -34,10 +34,11 @@ ENV MIPAVOICE_DATABASE_URL=sqlite:///data/mipavoice.db
 ENV MIPAVOICE_SFU_URL=/sfu
 ENV MIPAVOICE_SFU_SECRET=dev-secret-change-me
 ENV MIPAVOICE_SFU_UDP_PORT=50000
+ENV MIPAVOICE_SFU_UDP_PORT_MAX=50100
 ENV MIPAVOICE_ICE_SERVERS=stun:stun.l.google.com:19302
 
 EXPOSE 3901
-EXPOSE 50000/udp
+EXPOSE 50000-50100/udp
 VOLUME ["/data"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
