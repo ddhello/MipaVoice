@@ -112,7 +112,9 @@ export async function connectVoice(
   let closing = false;
   let keepaliveTimer: number | undefined;
   const peer = new RTCPeerConnection({
+    bundlePolicy: 'max-bundle',
     iceServers: devices?.iceServers ?? [{ urls: 'stun:stun.l.google.com:19302' }],
+    rtcpMuxPolicy: 'require',
   });
   const socket = new WebSocket(signalingUrl(url, token));
 

@@ -42,7 +42,9 @@ use webrtc::{
         ice_candidate_type::RTCIceCandidateType,
     },
     peer_connection::{
-        configuration::RTCConfiguration, peer_connection_state::RTCPeerConnectionState,
+        configuration::RTCConfiguration,
+        peer_connection_state::RTCPeerConnectionState,
+        policy::{bundle_policy::RTCBundlePolicy, rtcp_mux_policy::RTCRtcpMuxPolicy},
         sdp::session_description::RTCSessionDescription, RTCPeerConnection,
     },
     rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTPCodecType},
@@ -856,7 +858,14 @@ async fn create_sfu_peer(
         .with_media_engine(media_engine)
         .with_setting_engine(setting_engine)
         .build();
-    let pc = Arc::new(api.new_peer_connection(RTCConfiguration::default()).await?);
+    let pc = Arc::new(
+        api.new_peer_connection(RTCConfiguration {
+            bundle_policy: RTCBundlePolicy::MaxBundle,
+            rtcp_mux_policy: RTCRtcpMuxPolicy::Require,
+            ..Default::default()
+        })
+        .await?,
+    );
 
     let candidate_outbound = outbound.clone();
     pc.on_ice_candidate(Box::new(move |candidate: Option<RTCIceCandidate>| {
